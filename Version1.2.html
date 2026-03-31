@@ -1,0 +1,1820 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CoFounder AI</title>
+  <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    *{box-sizing:border-box}
+    body{margin:0;background:#09090f;font-family:-apple-system,BlinkMacSystemFont,'Inter',sans-serif}
+    #root{min-height:100vh}
+    ::-webkit-scrollbar{width:4px}
+    ::-webkit-scrollbar-thumb{background:rgba(139,92,246,.4);border-radius:2px}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    .animate-spin{animation:spin 1s linear infinite}
+    @keyframes floatOrb{0%,100%{transform:translateY(0)}50%{transform:translateY(-16px)}}
+    @keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+    .fadeIn{animation:fadeIn .35s ease forwards}
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+    .animate-pulse{animation:pulse 2s ease-in-out infinite}
+  </style>
+</head>
+<body>
+<div id="root">
+  <div style="display:flex;align-items:center;justify-content:center;min-height:100vh">
+    <div style="text-align:center">
+      <div style="width:40px;height:40px;border:3px solid rgba(139,92,246,.3);border-top-color:#8b5cf6;border-radius:50%;margin:0 auto 12px;animation:spin 1s linear infinite"></div>
+      <p style="color:rgba(255,255,255,.4);font-size:14px;font-family:sans-serif">Wird geladen...</p>
+    </div>
+  </div>
+</div>
+<script>
+(function() {
+  if (typeof React === 'undefined') {
+    document.getElementById('root').innerHTML = 
+      '<div style="color:white;padding:40px;text-align:center;font-family:sans-serif">' +
+      '<h2>Keine Internetverbindung</h2>' +
+      '<p style="color:rgba(255,255,255,.6);margin:20px 0">Bitte stelle sicher dass du mit dem Internet verbunden bist.</p>' +
+      '<button onclick="location.reload()" style="padding:12px 28px;background:#8b5cf6;color:white;border:none;border-radius:8px;cursor:pointer;font-size:14px">Erneut versuchen</button>' +
+      '</div>';
+    return;
+  }
+
+  const { useState, useEffect, useRef, useMemo, useCallback, createContext, useContext } = React;
+
+// ═══════════════════════════════════════════════════════════════
+// SUPABASE CLIENT
+// ═══════════════════════════════════════════════════════════════
+
+const SUPABASE_URL = "https://eixntbgjxxtppoguwuab.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_FdbVkNfbnxkfm8f3VSJ3-g_xToORV48";
+
+const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// ═══════════════════════════════════════════════════════════════
+// AUTH CONTEXT
+// ═══════════════════════════════════════════════════════════════
+
+const AuthContext = createContext(null);
+
+function AuthProvider({ children }) {
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(function() {
+    supabase.auth.getSession().then(function(res) {
+      setUser(res.data.session?.user || null);
+      setLoading(false);
+    });
+    const { data: listener } = supabase.auth.onAuthStateChange(function(_event, session) {
+      setUser(session?.user || null);
+    });
+    return function() { listener.subscription.unsubscribe(); };
+  }, []);
+
+  return React.createElement(AuthContext.Provider, { value: { user, loading, supabase } }, children);
+}
+
+function useAuth() {
+  return useContext(AuthContext);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// SUPABASE DATA HELPERS
+// ═══════════════════════════════════════════════════════════════
+
+const db = {
+  async saveOnboarding(userId, data) {
+    const allowedKeys = ["vorname","nachname","phase","bundesland","branche","kapitalbedarf","teamgroesse","investoren","foerderungen","businessplan","finanzplan","konkurrenz","preis","rechtsform","ziele","onboarding_complete"];
+    const row = { onboarding_complete: true, updated_at: new Date().toISOString() };
+    allowedKeys.forEach(function(k) { if (data[k] !== undefined) row[k] = data[k]; });
+    const { error } = await supabase.from("profiles").update(row).eq("id", userId);
+    if (error) console.error("saveOnboarding error:", error);
+    return !error;
+  },
+
+  async getOnboarding(userId) {
+    const { data, error } = await supabase.from("profiles").select("*").eq("id", userId).single();
+    if (error && error.code !== "PGRST116") console.error("getOnboarding error:", error);
+    return data;
+  },
+
+  async getCompletedTasks(userId) {
+    const { data, error } = await supabase.from("roadmap_progress").select("task_id").eq("user_id", userId);
+    if (error) console.error("getCompletedTasks error:", error);
+    const map = {};
+    if (data) data.forEach(function(r) { map[r.task_id] = true; });
+    return map;
+  },
+
+  async toggleTask(userId, taskId, completed) {
+    if (completed) {
+      const { error } = await supabase.from("roadmap_progress").upsert({ user_id: userId, task_id: taskId }, { onConflict: "user_id,task_id" });
+      if (error) console.error("toggleTask insert error:", error);
+    } else {
+      const { error } = await supabase.from("roadmap_progress").delete().eq("user_id", userId).eq("task_id", taskId);
+      if (error) console.error("toggleTask delete error:", error);
+    }
+  },
+
+  async uploadDocument(userId, file, docTypeId) {
+    const path = userId + "/" + Date.now() + "_" + file.name;
+    const { error: uploadError } = await supabase.storage.from("documents").upload(path, file);
+    if (uploadError) { console.error("upload error:", uploadError); return null; }
+    const { error: dbError } = await supabase.from("documents").insert({
+      user_id: userId, doc_type_id: docTypeId || "custom",
+      file_name: file.name, file_size: file.size, file_path: path
+    });
+    if (dbError) console.error("doc insert error:", dbError);
+    return path;
+  },
+
+  async getDocuments(userId) {
+    const { data, error } = await supabase.from("documents").select("*").eq("user_id", userId).order("uploaded_at", { ascending: false });
+    if (error) console.error("getDocuments error:", error);
+    return data || [];
+  },
+
+  async deleteDocument(userId, docId, storagePath) {
+    await supabase.storage.from("documents").remove([storagePath]);
+    const { error } = await supabase.from("documents").delete().eq("id", docId).eq("user_id", userId);
+    if (error) console.error("deleteDocument error:", error);
+  },
+
+  async getDocumentUrl(storagePath) {
+    const { data } = await supabase.storage.from("documents").createSignedUrl(storagePath, 3600);
+    return data?.signedUrl;
+  },
+
+  async getFoerderprogramme(onboardingData) {
+    let query = supabase.from("foerderprogramme").select("*").eq("aktiv", true);
+    const { data, error } = await query;
+    if (error) console.error("getFoerderprogramme error:", error);
+    if (!data || !onboardingData) return data || [];
+    // Client-side relevance scoring
+    return data.map(function(p) {
+      let score = 0;
+      if (p.phasen && p.phasen.length > 0 && p.phasen.includes(onboardingData.phase)) score += 3;
+      if (p.bundeslaender && p.bundeslaender.length > 0 && p.bundeslaender.includes(onboardingData.bundesland)) score += 2;
+      else if (!p.bundeslaender || p.bundeslaender.length === 0) score += 1; // bundesweit
+      if (p.branchen && p.branchen.length > 0 && p.branchen.includes(onboardingData.branche)) score += 2;
+      else if (!p.branchen || p.branchen.length === 0) score += 1;
+      return Object.assign({}, p, { relevance: score });
+    }).sort(function(a, b) { return b.relevance - a.relevance; });
+  },
+
+  async saveQuizResult(userId, answers, resultKey, scores, confidence) {
+    const { error } = await supabase.from("quiz_results").insert({
+      user_id: userId, answers: answers, result_key: resultKey, scores: scores, confidence: confidence
+    });
+    if (error) console.error("saveQuizResult error:", error);
+    return !error;
+  }
+};
+
+
+// ═══════════════════════════════════════════════════════════════
+// INTELLIGENT ROADMAP ENGINE (unchanged logic)
+// ═══════════════════════════════════════════════════════════════
+
+function generateIntelligentRoadmap(onboardingData) {
+  if (!onboardingData || Object.keys(onboardingData).length === 0) return [];
+  var tasks = [];
+  var taskId = 0;
+  var add = function(week, category, title, description, priority, effort, link, autoCheck) {
+    var shouldAutoCheck = autoCheck ? autoCheck(onboardingData) : false;
+    tasks.push({ id: "task_" + (taskId++), week: week, category: category, title: title,
+      description: description, priority: priority, effort: effort, link: link, autoChecked: shouldAutoCheck });
+  };
+  add(1, "Unterlagen", "Businessplan anlegen", "Erstelle oder lade deinen vollständigen Businessplan hoch", "hoch", "1-2 h", "/dokumente", function(d) { return d.businessplan === true; });
+  add(1, "Unterlagen", "Finanzplan erstellen", "Umsatz-, Kosten- und Liquiditätsplanung für 3 Jahre", "hoch", "1-2 h", "/dokumente", function(d) { return d.finanzplan === true; });
+  add(1, "Markt & Produkt", "Konkurrenzanalyse dokumentieren", "Wer sind deine 3-5 Hauptwettbewerber?", "mittel", "30 min", "/dokumente", function(d) { return d.konkurrenz === true; });
+  add(2, "Markt & Produkt", "Preisstrategie festlegen", "Dokumentiere deine Preisstrategie und Kalkulation", "mittel", "30 min", "/dokumente", function(d) { return d.preis === true; });
+  add(2, "Markt & Produkt", "90-Tage-Ziele finalisieren", "Was willst du in den nächsten 3 Monaten erreichen?", "hoch", "30 min", "/dashboard", null);
+
+  var isAlreadyFounded = onboardingData.phase === "gegruendet" || onboardingData.phase === "wachstum";
+  var hasChosenLegalForm = onboardingData.rechtsform === true;
+  if (!hasChosenLegalForm && !isAlreadyFounded) {
+    add(2, "Recht & Gründung", "Rechtsform-Quiz durchführen", "Finde die passende Rechtsform: Einzelunternehmen, GbR, UG oder GmbH", "hoch", "10 min", "/gewerbeanmeldung", null);
+  }
+  if (isAlreadyFounded || hasChosenLegalForm) {
+    add(3, "Recht & Gründung", "Gründungsdokumente prüfen", "Stelle sicher dass alle Gründungsunterlagen vorliegen", "mittel", "30 min", "/dokumente", null);
+  }
+  if (onboardingData.investoren === true || isAlreadyFounded) {
+    add(3, "Recht & Gründung", "Notar-Vorbereitung starten", "Gesellschafterdaten, Firmennamen und Stammkapital zusammenstellen", "hoch", "1-2 h", "/gewerbeanmeldung", null);
+  }
+  add(3, "Recht & Gründung", "Gewerbeanmeldung vorbereiten", "Checkliste für Gewerbeamt durchgehen", "hoch", "30 min", "/gewerbeanmeldung", null);
+
+  if (onboardingData.foerderungen !== false) {
+    add(4, "Finanzierung & Förderung", "3 passende Förderprogramme shortlisten", "EXIST, KfW, Gründungszuschuss – was passt zu dir?", "hoch", "30 min", "/foerderprogramme", null);
+    add(5, "Finanzierung & Förderung", "Unterlagen für Förderantrag sammeln", "Businessplan, Finanzplan, Nachweise komplett?", "hoch", "1-2 h", "/dokumente", null);
+    add(6, "Finanzierung & Förderung", "Antragsschritte prüfen", "Fristen, Voraussetzungen und Kontakte klären", "mittel", "30 min", "/foerderprogramme", null);
+  }
+  if (onboardingData.investoren === true) {
+    add(4, "Finanzierung & Förderung", "Pitch Deck erstellen", "10-15 Folien für Investorengespräche", "hoch", "1-2 h", "/dokumente", null);
+    add(5, "Finanzierung & Förderung", "One-Pager erstellen", "Kompakte Übersicht auf einer Seite", "optional", "30 min", "/dokumente", null);
+    add(7, "Finanzierung & Förderung", "Cap Table Grundstruktur", "Wie verteilen sich die Anteile?", "optional", "30 min", "/dokumente", null);
+  }
+  if (onboardingData.teamgroesse >= 2) {
+    add(4, "Recht & Gründung", "Founder Agreement klären", "Rollen, Verantwortlichkeiten und Anteile schriftlich festhalten", "mittel", "1-2 h", "/dokumente", null);
+  }
+  var phase = onboardingData.phase || "idee";
+  if (phase === "idee") add(5, "Markt & Produkt", "10 Problem-Interviews planen", "Validiere deine Idee durch Gespräche mit Zielkunden", "optional", "1-2 h", "/dashboard", null);
+  if (phase === "validiert") add(6, "Markt & Produkt", "Preisannahmen testen", "Führe Zahlungsbereitschafts-Tests durch", "mittel", "1-2 h", "/dashboard", null);
+  if (phase === "mvp") add(7, "Markt & Produkt", "MVP Launch-Checkliste", "Was muss vor dem Launch stehen?", "mittel", "30 min", "/dashboard", null);
+  if (isAlreadyFounded) add(5, "Recht & Gründung", "Steuerliche Erfassung vorbereiten", "ELSTER-Zugang und Fragebogen zur steuerlichen Erfassung", "mittel", "30 min", "/gewerbeanmeldung", null);
+
+  add(6, "Unterlagen", "Website / Impressum vorbereiten", "Rechtskonforme Website-Pflichtangaben erstellen", "mittel", "30 min", "/dokumente", null);
+  add(7, "Unterlagen", "Datenschutzerklärung erstellen", "DSGVO-konforme Datenschutzerklärung für Website", "mittel", "30 min", "/dokumente", null);
+  add(8, "Recht & Gründung", "Geschäftskonto eröffnen", "Trennung Privat/Geschäftlich – Bank auswählen", "hoch", "1-2 h", "/dashboard", null);
+  add(9, "Unterlagen", "Alle Dokumente final prüfen", "Sind Businessplan, Finanzplan, Verträge aktuell?", "mittel", "30 min", "/dokumente", null);
+  add(10, "Finanzierung & Förderung", "Förderanträge einreichen", "Alle vorbereiteten Anträge final absenden", "hoch", "1-2 h", "/foerderprogramme", null);
+  add(11, "Markt & Produkt", "Erste Marketing-Maßnahmen planen", "Social Media, Website, Netzwerk – wie wirst du sichtbar?", "optional", "1-2 h", "/dashboard", null);
+  add(12, "Markt & Produkt", "90-Tage-Review durchführen", "Was hast du geschafft? Was sind die nächsten Schritte?", "mittel", "30 min", "/dashboard", null);
+
+  return tasks.sort(function(a, b) { return a.week - b.week; });
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// STATIC DATA
+// ═══════════════════════════════════════════════════════════════
+
+const BUNDESLAENDER = ["Baden-Württemberg","Bayern","Berlin","Brandenburg","Bremen","Hamburg","Hessen","Mecklenburg-Vorpommern","Niedersachsen","Nordrhein-Westfalen","Rheinland-Pfalz","Saarland","Sachsen","Sachsen-Anhalt","Schleswig-Holstein","Thüringen"];
+const BRANCHEN = ["SaaS / Software","Cleantech / GreenTech","HealthTech","EdTech","FinTech","E-Commerce","Hardware / IoT","KI / Machine Learning","Consulting / Dienstleistung","Andere"];
+
+const GEWERBE_CHECKLISTS = {
+  einzelunternehmen: { label:"Einzelunternehmen", steps:[
+    {id:"gewerbe_einzel_1",title:"Gewerbeanmeldung ausfüllen",desc:"Formular beim zuständigen Gewerbeamt ausfüllen (Kosten: 20–60 €).",zeit:"30 min",link:"https://www.gewerbeanmeldung.de"},
+    {id:"gewerbe_einzel_2",title:"Personalausweis kopieren",desc:"Kopie deines gültigen Personalausweises oder Reisepasses anfertigen.",zeit:"5 min"},
+    {id:"gewerbe_einzel_3",title:"Tätigkeitsbeschreibung formulieren",desc:"Präzise Beschreibung deiner gewerblichen Tätigkeit erstellen.",zeit:"15 min"},
+    {id:"gewerbe_einzel_4",title:"Gewerbeamt-Termin buchen",desc:"Online-Termin beim Gewerbeamt deiner Stadt/Gemeinde vereinbaren.",zeit:"10 min"},
+    {id:"gewerbe_einzel_5",title:"Finanzamt-Fragebogen (ELSTER) vorbereiten",desc:"Fragebogen zur steuerlichen Erfassung über ELSTER ausfüllen.",zeit:"45 min",link:"https://www.elster.de"},
+    {id:"gewerbe_einzel_6",title:"Geschäftskonto eröffnen",desc:"Geschäftskonto bei einer Bank eröffnen – Privat und Geschäft trennen.",zeit:"30 min"},
+    {id:"gewerbe_einzel_7",title:"Kleinunternehmerregelung prüfen",desc:"Prüfe ob die Kleinunternehmerregelung (§19 UStG) für dich sinnvoll ist.",zeit:"15 min"},
+    {id:"gewerbe_einzel_8",title:"Betriebshaftpflicht prüfen",desc:"Informiere dich über sinnvolle Versicherungen für dein Gewerbe.",zeit:"20 min"}
+  ]},
+  kleingewerbe: { label:"Kleingewerbe", steps:[
+    {id:"gewerbe_klein_1",title:"Gewerbeanmeldung ausfüllen",desc:"Formular beim Gewerbeamt ausfüllen (vereinfachtes Verfahren).",zeit:"30 min",link:"https://www.gewerbeanmeldung.de"},
+    {id:"gewerbe_klein_2",title:"Personalausweis kopieren",desc:"Kopie deines gültigen Ausweisdokuments anfertigen.",zeit:"5 min"},
+    {id:"gewerbe_klein_3",title:"Tätigkeitsbeschreibung formulieren",desc:"Gewerbliche Tätigkeit präzise beschreiben.",zeit:"15 min"},
+    {id:"gewerbe_klein_4",title:"Gewerbeamt-Termin buchen",desc:"Termin beim zuständigen Gewerbeamt vereinbaren.",zeit:"10 min"},
+    {id:"gewerbe_klein_5",title:"Kleinunternehmerregelung beantragen",desc:"Umsatzsteuerbefreiung nach §19 UStG beim Finanzamt beantragen.",zeit:"20 min"},
+    {id:"gewerbe_klein_6",title:"Finanzamt-Fragebogen (ELSTER)",desc:"Steuerliche Erfassung über ELSTER durchführen.",zeit:"45 min",link:"https://www.elster.de"},
+    {id:"gewerbe_klein_7",title:"Einfache Buchführung einrichten",desc:"EÜR-Vorlage vorbereiten (Einnahmen-Überschuss-Rechnung).",zeit:"30 min"},
+    {id:"gewerbe_klein_8",title:"Geschäftskonto eröffnen",desc:"Separates Konto für geschäftliche Transaktionen einrichten.",zeit:"30 min"}
+  ]},
+  gbr: { label:"GbR", steps:[
+    {id:"gewerbe_gbr_1",title:"GbR-Vertrag aufsetzen",desc:"Gesellschaftsvertrag mit allen Partnern schriftlich festhalten.",zeit:"1-2 h"},
+    {id:"gewerbe_gbr_2",title:"Gewerbeanmeldung für alle Gesellschafter",desc:"Jeder Gesellschafter muss separat ein Gewerbe anmelden.",zeit:"30 min",link:"https://www.gewerbeanmeldung.de"},
+    {id:"gewerbe_gbr_3",title:"Ausweisdokumente aller Gesellschafter",desc:"Personalausweise aller Gesellschafter kopieren.",zeit:"10 min"},
+    {id:"gewerbe_gbr_4",title:"Gesellschaftsname festlegen",desc:"Einen Namen für die GbR wählen und prüfen lassen.",zeit:"30 min"},
+    {id:"gewerbe_gbr_5",title:"Steuerliche Erfassung (ELSTER)",desc:"Fragebogen zur steuerlichen Erfassung für die GbR ausfüllen.",zeit:"45 min",link:"https://www.elster.de"},
+    {id:"gewerbe_gbr_6",title:"Geschäftskonto eröffnen",desc:"Gemeinsames Geschäftskonto für die GbR eröffnen.",zeit:"30 min"},
+    {id:"gewerbe_gbr_7",title:"Gewinnverteilung festlegen",desc:"Klare Regelung der Gewinn- und Verlustverteilung dokumentieren.",zeit:"30 min"},
+    {id:"gewerbe_gbr_8",title:"Haftungsregelung klären",desc:"Gesamtschuldnerische Haftung verstehen und ggf. Versicherung prüfen.",zeit:"20 min"}
+  ]},
+  ug: { label:"UG (haftungsbeschränkt)", steps:[
+    {id:"gewerbe_ug_1",title:"Gesellschaftsvertrag aufsetzen",desc:"Satzung der UG erstellen (Musterprotokoll oder individuell).",zeit:"1-2 h"},
+    {id:"gewerbe_ug_2",title:"Notar-Termin buchen",desc:"Notarielle Beurkundung des Gesellschaftsvertrags (ca. 500–1.000 €).",zeit:"30 min"},
+    {id:"gewerbe_ug_3",title:"Stammkapital einzahlen",desc:"Mindestens 1 € Stammkapital auf ein Geschäftskonto einzahlen.",zeit:"30 min"},
+    {id:"gewerbe_ug_4",title:"Handelsregister-Eintragung beantragen",desc:"Anmeldung beim Handelsregister über den Notar (ca. 150 €).",zeit:"30 min",link:"https://www.handelsregister.de"},
+    {id:"gewerbe_ug_5",title:"Gewerbeanmeldung durchführen",desc:"Nach HR-Eintrag: Gewerbe beim zuständigen Amt anmelden.",zeit:"30 min",link:"https://www.gewerbeanmeldung.de"},
+    {id:"gewerbe_ug_6",title:"Steuerliche Erfassung (ELSTER)",desc:"Fragebogen zur steuerlichen Erfassung der UG ausfüllen.",zeit:"45 min",link:"https://www.elster.de"},
+    {id:"gewerbe_ug_7",title:"Geschäftskonto eröffnen",desc:"Firmenkonto bei einer Bank eröffnen.",zeit:"30 min"},
+    {id:"gewerbe_ug_8",title:"Geschäftsführervertrag erstellen",desc:"Vertrag für den/die Geschäftsführer aufsetzen.",zeit:"1 h"},
+    {id:"gewerbe_ug_9",title:"Transparenzregister-Eintragung",desc:"Eintragung der wirtschaftlich Berechtigten im Transparenzregister.",zeit:"20 min",link:"https://www.transparenzregister.de"},
+    {id:"gewerbe_ug_10",title:"Rücklagen-Pflicht beachten",desc:"25% des Jahresüberschusses müssen als Rücklage einbehalten werden.",zeit:"10 min"}
+  ]},
+  gmbh: { label:"GmbH", steps:[
+    {id:"gewerbe_gmbh_1",title:"Gesellschaftsvertrag aufsetzen",desc:"Satzung der GmbH mit Anwalt/Steuerberater erstellen.",zeit:"2-4 h"},
+    {id:"gewerbe_gmbh_2",title:"Notar-Termin buchen",desc:"Notarielle Beurkundung des Gesellschaftsvertrags (ca. 1.000–2.000 €).",zeit:"30 min"},
+    {id:"gewerbe_gmbh_3",title:"Stammkapital einzahlen",desc:"Mindestens 12.500 € (Hälfte von 25.000 €) auf Geschäftskonto einzahlen.",zeit:"1 h"},
+    {id:"gewerbe_gmbh_4",title:"Handelsregister-Eintragung beantragen",desc:"Anmeldung beim Handelsregister über den Notar.",zeit:"30 min",link:"https://www.handelsregister.de"},
+    {id:"gewerbe_gmbh_5",title:"Gewerbeanmeldung durchführen",desc:"Nach HR-Eintrag: Gewerbe beim zuständigen Amt anmelden.",zeit:"30 min",link:"https://www.gewerbeanmeldung.de"},
+    {id:"gewerbe_gmbh_6",title:"Steuerliche Erfassung (ELSTER)",desc:"Fragebogen zur steuerlichen Erfassung der GmbH ausfüllen.",zeit:"45 min",link:"https://www.elster.de"},
+    {id:"gewerbe_gmbh_7",title:"Geschäftsführervertrag erstellen",desc:"Anstellungsvertrag für den/die Geschäftsführer aufsetzen.",zeit:"1-2 h"},
+    {id:"gewerbe_gmbh_8",title:"Geschäftskonto eröffnen",desc:"Firmenkonto bei einer Bank eröffnen.",zeit:"30 min"},
+    {id:"gewerbe_gmbh_9",title:"Transparenzregister-Eintragung",desc:"Wirtschaftlich Berechtigte im Transparenzregister eintragen.",zeit:"20 min",link:"https://www.transparenzregister.de"},
+    {id:"gewerbe_gmbh_10",title:"Steuerberater beauftragen",desc:"Steuerberater für laufende Buchhaltung und Jahresabschluss finden.",zeit:"1 h"},
+    {id:"gewerbe_gmbh_11",title:"Gesellschafterliste erstellen",desc:"Notariell beglaubigte Gesellschafterliste beim HR einreichen.",zeit:"30 min"},
+    {id:"gewerbe_gmbh_12",title:"D&O-Versicherung prüfen",desc:"Geschäftsführer-Haftpflichtversicherung prüfen und ggf. abschließen.",zeit:"30 min"}
+  ]}
+};
+
+const LOGO_SRC = "data:image/webp;base64,UklGRgglAABXRUJQVlA4WAoAAAAQAAAAZwEAdwAAQUxQSMoTAAAB/yckSPD/eGtEpO4TjgO2jRuQcl9k9x/Y7uUuENH/CeAPdekfzHDrArgHgz3SmmprS0XiFopEW6STMYhBC+x2Rsv7sl0tt6kMNrYNMTiJVfP0efmopu32tA3UwNYaarPFPSZmw/ZCs9DMJMmSBmkSEmkqNWg7IgkdH48lCe3obYDTnQO5tpvuhevgjda2ZXaibduO4zxrxVjpkISggY67NrTjPhoYtNst0O7u7u7ubtiNtuA03DcOccdiaJQIWanrPPcfVXVdV63b6n40IiaA/+////OzmVmPJJP//XgM9FaD5fzvwCOtYw8b3y/rfcia9z+xGfBggyw4MP1Nv1l81Ch6pnseXHTT9eshDKZgMP8TdxeSENYbkRzYc+25fbgPFnc466okpRaau3b0QkY+rQEkNy17JYTBEeCsv0vNLD15w+cWbXh89w5Tr8M0cuShRy044RhnQPrzZMIgsMDki6X90pN/fOkR9Frnnn2eNKDtLyN2zeH1OzUgrf3oeMCjkHojZkYBI96yTgPS+4hdMkadOBLjiZ8MhxCMXqtH9vz2KmITiN1h1FQGGlz+x71EoydrkV3/tt/gfEJXRhyGeOSyzUSjV6vUYK+S7Z2Nd0EAq5YSk+jhCuKQrHuDW01iOxj3PQKi5/tsBvRyYj0K2zYCFJbp+Voe+tKUlvV5LWLgbsRwXPSAQzpH+3U2sQ64FGPGUNETthxX5vw7Qg3mBzyQmtsmYL0hIheZHTck1RB5lwZ0HpEeceBm0uFT8Upm/ZuKfItF6xUZa/a5T6gh8kbt1/EEesdbHzMOp7qFO7Ouw+khP7UdimrOXDX1MmIvCaPOyPuVt43GekfGiLEQqwUuk64k0Et62mjxaCUjroM7zXpIgenDVKwmV3COeEqsFD3kyAx8+8ZKgZOzihXkmswcJQhGlmpxRwmCoazuWahHqZQ7ysLNlFUumAxZzqXcZciUIBgQolcJBsgMCDHEEhJSlWB1hGhgMVgZCalbgQWwerdRMfIO+ZZNqBbzROlolcxzypSM1jWlekoHFZmSIZRK1JkzAgEk0dYqJAGIeoPlckl11B5Cl4zpsIZQ7Wdi7W6vxRM+/1kLx0wK6YGt996xOBVewYvM7OcvOHSC5Qe2LrpjcZPQHWPMcbI6dC3WxlXw9Gc988gj+tn6+Nrbbt+CewfT88bJkK1Ya+pgzJ0kQ/bYraZT+mWc+8LpWCk7dYQM2SE4z3vhuS/sINv+2K5HEnjoYBp2aqjj3BeOh8NeeK6V0f27NiYI3TD6p4p7qex2t1iEU2vfq985j5LLfjWEquFVbxpOyZU/G4lbNwKzPmvUaW/BWwK86LxJlNx67QkQ2sHPptP6g7eGokPg03MMjDUf9vzzAw2kDSPdOxn+m+EGxgvp41ZJHVr3bF55w18gWIexP6dO6X3wcony+x667XTwLjgLx4olqIIxdmfmXlTNMqd+aTYVX3cc1snESV+k6n3nYdaVwrJXk6XYJvDMLwFJmCHhji6bTOywO2WniAOUfqqviKSwF9h5QHaKAf2UWIYd/dlJ4Sz6uLoYKEqYA+y77GTwFshPDZVV21e8E15YDIRSAdBtpxLqC7zC2PsguULgeUpaVos9dzYpDNx6w6qH4dAZJx7XGGDGZMqeMJ8iprtuWfPgXp885dhnD0nSryLeDXPqTTgWeF9BwqPRUTlp+z8T2nnITghWzo1WZQgAUlNnEMoE2p5NH9eqUAmQpCj9ahShDYE6m3oXvEhFOaScpI8Sa4t8Cb//cVMFYxq2fTRWxQJ/0IDSd6bQefbHXzZQ6DxCG+MQmso/mkvnaf/4vjDAIcFUW9mkCiG7jLFBBAOUhZkBITNqLIM7hw23em5Xs9oZgFLm6INRm45JpYoiUzK1MTPwlD734SLUlVkIy1Kg8kLsTjOqBr6gp7T5ZPAYAmA580ntL5pzcZCxj8RDx4HFGMDImQUrEAPJB0GwMkYosgtROEDKHgCSORAKhA0msl3zpHfF2imZGxYyhznlg5UayvAyoQ2kAMGLLxyXQj2Wh82Ae6icmA+/JVQJnKF9emAi0ensXnxBA7rFWliC8eghRKezh+bqR4GlRfd0xc4ysnxQNpbRVgR2LWkSpw4nBdreQRhMMi4hdGPvvhYfBWSn9ZGNbmUu31kqhUWmDvuWtxk2tSEDM77TUD1w6LjMUlRFwybAu4kVzPvW5ebu2TQobYFbNKCTCbKrdoV8ZCZSPsAEvLjUQrfy23eXQZDtph2ulsDNbz7jGGD8qW9boBbFB5bIBhHy9bfKaivil34aEsTJc888K6YWcf1uL/O2XaWAWLTJvv4lbXzS69+fBSHPe24OtTiz+2zffZWciQdnzqwUOV8Dej8NKgZOLPbs/wnRH744FocsJFJ9ylHNvuvv9W6FsVs9l4DCH/5LEID2Xvj7R8EQND71kSwg88ccBhOya3KoDfbuT7Sf991j23jzu9lLHLjLc6lMZzOZQPDBL2Ug6xxiLcZ87OGNNUwJ9tSReAUbujbndX3BqmD2kLT7APjUfrfXUqfx2uHoU4QuUVAx8CUMIA99iBBNgIWc3wgG8h2jCxtMiNOLUF/IsQDcKPoux4AUfi0rkUTtAgFuaW3IYDaFUIuYCWtSqAILsE2BioEzNaA3EanGaW9585tH+oZPxeLceSnU4Gn8+anxQ2K3Ktuyb3gBhj+bkER7i83jaE3+IsKgEZDDj0ditYnOseifJUBx59iiRJdbCOkCWhhvZjVYttmwDKOimAnrCBWM7+S0+2C8Wkf/8j0x/lCiTtO3+339ULNBZcVHHoi55ZXDEmVdh50jhxReRh40bfNRX0uhttKN5svHZ4fM8RpUMX2Ttv1Qi8aOF8upajnOhnuxcpZ4jvmixzzXEQxyPnJO5grzeuyvFEfNvdO7tHCp504JyzMnyiDzXmIpxYf/ZAnMnjUmDZrdBkTjYoSpW4X96YkgkI6l5NxVnssUVdqKw1tk63HqYOpI5cXkKjp4grgHVdCBk8XdOHUmIDKnr+BeqZasm5PxTLo16QFKe34WyVDIM8xLgf0BB9fIaQzSxA9uJkH29bd77p5s9z1kMFtgJcZvotsh+TwcxHJiPdPxretRFSYNQaurwOH9idV0cxJxYDW5FrFxa2QKXS5ev8lzh+LmDLMAZOsaZuVMK550QWLWYBHb3iAEsqufdLqG23IExmFlLt1hKrHjwwNlrI0SnyI1wLi+Hjga7t9l1eZjj26sYhwUMk905enYnl3UKxt4BA7uVqTs5n8CDmrDJpyqW7YigIMGC4xe882QAHEJgwBthJaDD8Y6VNSIbdZJQkCY/HpyhBw3rzarIzEPFitQ+WhYuccrQCLwELkLwh7ZjmrB0lYYTQ41qAS5U/Y9kJiAA2whVHE90m7s4En2sRUxQw7rbwupe6zHAPoinZNKyLaLjs7TL6G1z1AAUvwIgRpNB06Fe6hcMAtW4lQ1wOiyUX+E8WTqDCXKZ6APQKwnVjFtoe2EwSM99dosg2xX72IQRtpKJUTpQNkhs9pAiqDmiAv2hf21cNSYxGpUwRh9FCyhuoDcFYG6kOABhp7QkJWTbVxaIpVqfaoFjiBUkY1ut2HwwNA7vhYwgEuI3SvamZUobfSVIrezCDk0rrjEC+p0ZuG711ZyJozJrECVAomjsC4EdMgorB6FUbCb/suGUPm6U0uUdPp3ENKDZDAOxStYtsOwlscGUwqfWNmSw4bbknVtPGopUomtRQnZzlxGAoIBKOz84mqMmudg656wKsZMbOf95Epzi6ZeT+zCejTiAOo1hj8qPQGieqTke9d7bgNPA3gSWsY3sHKuUd5G20A1xE4qJwZeOz0ZyP7y5tAtOxxA9qgha3fGfaYOJu1FnSxCNIDEVUeAUa+YC2vkVWAetuEJVEGM3pn1ta7cTzF0Gl6LM7nZzOsoru+XlUvhFlOnS3Om/N1tNGEqXi6wgBzAbTnEdlZLKEeKt7/QZQBnbOlS5misDSV3IWqVPfYp2du3SGC22BpGvZbCVFiNUTEzE1YRqGLcI92I1+JAwfJmZIFZLdHO037dyc6zqDGkTqN2e+6gRGYJASyFtxPLxfxSspPjztXGI6gllcst4iGsFCkMPQuHHH7iWDcsj56Ig7inTEyey6gE234E3/uBJfCkNxDr4vDDxSJUwfLQ2XA3Vinww5yeHIvXkQHswZXO2cq1BC5Q3rQEeR1lkygtlq+3DM6qEK2M+7gTFEHcsaXBYy3GNHInsyk4wHYqirRgemHg4+lObJ5DimDcWEbUHhvy+INdQWB5hVlts4cqra3kHH5YZgXVxVka0PnEaqbxY/CV+/NlFM+ZIa/B7ZAdKf9mb0i5jlCiquK+q2hJeg99JayPL5ACyK/AWSvAOXYU3s59wjy1eaAKyXihYyCMLsanhr5PDorbVpTpogqZHrvIEnihswl1zcQf3VDDtEBzNblSsiH357wyBKuEXXoU28/awwWFGh+pJfJl7dfxDPbMj+WAF82XEYO1WIi8enjqA4XdF5K41wwsjXxHbriBhQY/bGQgsIRcAdOQs3Aw6rQWwzUQf0kOkMK/0GgOglbZVwoHCt3lXg/Mg1V7vUpgIb5hk6kSkTdrQO8kVglpofY3/kwMqy5qNF/5nCJWCjz9yabuDJ4Gmy+7zBNYzumfAHd34D3N1ABS48dPhII7tweB50+8YCBjBrxROUDmwSVWCU9zJiWjVpEBkXnG10kNkKfvIjoHq5ArZF9ztSdQobMJtSSfB/fiVF4Iy/d7DWbD1qfmnsk0KjTSx8j+ByT71D785yMIFdztX7VPxxEY9PbePWRQzrr0tH6AMS++URKQGw//zLPCtktJYOaXf3H+COh/7q+UHMj2s4FAdeP0PlktDfcMB4895owjSH1AMeTnhGaJbeRyNX42WUu+y70O07iJYhGq1JgDizBqdJ15ZDM+dCgNL+GheSPGZ1w5mV4wNNnDw4hWwkKhzYhX8O/RdMqI7IDkbF4rGjPHkA2wdNjROUBgvprBQAYPr4/jD0EGeH7HqJTrCH0rlbyOHbsADhoKZAeM5/er8BK/22Yqkf3SG6o4N6kQpHDOlSFVcyaMkNZWMg46TKyk7ucD654PIQYHMyX+OXkx/xk5AMYzEXfMhBCDg5kSR41CzBqC/TsA5oMMSOa0JgJt59M28EU1G4BSBFAOgOWDT5WlGnAW7C9kNXQuzA0Qww7JJitR0bnz1iqBs5Va/O5nk6sZ87Ct6yoFpg9XWk6uxWASqPntSXSe8JHXGXEBbU0ecO39zBF0HvfPH8bpPzAZ/x4NwAkAWYAbQI5ErI2F8Jcz9zcMIAs3ABnTqDvyURWxBqnFjNYUGACjdFKpIu6nsts9uQiQ/bRrQzV4BrZ2l1WJzMC3bqRu+f2o0K7L3nbKbDhk+kmn9A9EGlgbyDyOknZe/I7TZsO4aceeOlZ9PLSLf8ebIeFGZ2V4aiuivVnfZWcqBaNzzoEuWgh3HZ1Ctc6SFJ2bttLlnCtFzldLCnc+h+qJabAKp9JCWLPbc00oL3tQ7em46RHKWr51ndrTceff99BdFdm7IO744jFQYAZIFuCmOzE6m8VPvb9BkhkIubN5NdYuFdkpilyCwNy7rGmQgoBUpNDJHAN05e+2oQ5FTQGUCGRP7cyGrCuSQ+o78+pQSQdMg0VYFWcarMGp3eh/14pSq/54MyojY/jblpZac8FluLoTI229JiO+/Lxjh9D5yWt/sARR1sTs95w9ls4rf3gTov2oCAxlWBkin/kcbfuAUZHyex9f+ferbyaI9j4cqyESBhhCABjVjsj7RNu7nutWwRk/OrMaVTD6p4m76aIMwvM+fOHND1p+cNuim28vqNEXfuCCmx60/ND2Rbfc2sRENzNLzzNMVtyH6gASTDlx/uTDR7D90WW33rUZE+XNEwcde+K08cPY/NjiW/51CyXfdHB2st9JLmH2xVf3YWS/i4JPHpa9nWzgPjZvGQBHtBVb3x1l1bJPgtt+mh3ZY6AWswNePgxD6AKqRGZH27uKXMGZNVosRfWBRVob0ASIuZIFWhvQBIiiu2LHr+lYl3kWQIMmgHumslsCLNIEiLnEX+hYBvIf6Ji5msruOdFR7L2kQNXIwPobGLSRGdjmJ1AFY47bnofI3QALMTjgZsqiRvMYHHAzZdF1C5266E7OQDApU6u55QzmpixKBmuTM6UttEuCYKWEJCpG6k3CQhulThY6FJUCV0iXEqi0ELv/MVN32hqIrhqI/1ANRHcNxH9BjVFbsj5ErJJZAEtyoHcc7CUq0hy8guVh02EpveTA1cqL3KjCYQdnVqLeUbBjiqbeRazizGmwb3kvKXKlii1jsCowF394cw8p8gIN6AsEqorZsCqFnpHbgRtT8fhotyqWmAUrMHrECtvv8UIvJ1CJg8eLJfSMjWWICwnUMLlfWknuEWX2YTzjQLc6ZuLb1qOeUMgEjEMOxalzPqzd7j2hyLDJIDuUQI2ZGbAIp/cbjNlTyAYYNVo+YCasoOdrwfH37AZ2UbMx8eDMMtTb8Qicdpty4P71dTlzsV2rezeGOUWm76xrpH3izvWoJjga27QjEHozSijDrI+tkvZLS/7SRNScmQ53NunZxgPGzz76ZJf2Sw++eyhB1DZkBjr2r6YezfBDaM1ZWvfukYCo2/MhY5pMPIMergz8yYtfPByiUb8zdwQ9Xtv9wL1/OwIIRjczj30hey9nx4ZNTwB4MLqbufOj9H6DOYPQvdejLP6///9PzlZQOCAYEQAAMFMAnQEqaAF4AD5tMpNIpCKhoSVzq6iADYlpbuDAAGdnXP+nX89/GHwL/xH48/sr23/sT2+/ZXopdD9uh+X5s99/xS1AvW/+i30nP/876AXrF88/33958cTUX7zewB/JP6J/u/Uj/F/6rxyvpH/Q9gb+Lf0T/cf4D8wPpi/rP/V/pv8l6Tfy7/O/+L3BP5B/Qv+V/gv8x77nsI/bb2F/1q+/9p58Zhz3LXzCCkuCl3eShsM6swd7rVKlNw6QHJXcZwiec8aYx+KO9j8Ud7H4o7vOpILJU/+26wR/3oOjOsuUyH05xgfmte4IXkmwq7Z53SGJ50ottlpxhr63hlBgZxYF5aqDJ10tNHXFaVDV0szfgsrqYanM1Hqf+qv6Vz/ho/np/KDxeQq4pjxdm6OYDXiaizfcX0Gse72rAC4Bi5iF+aypSH/VOJxQEa1kBlCcTFJzuHkPlBX+hYATAGNU9KIMTGbKJ6ciwaLBebX+Y6ks4bWZLwS11i4rWL5Bkr/sBwDVHsrmO5Lm/qKbYTli2XJeZhOb+X52Wya/+j2n9/2OCjfeg7eCyRqtNx1LecBDeRnC3o4tBxKAyU9C1XAWT9VLNJH5NEvp33W+mFdB86/f0ywwJEYK5gb7A9ztIbM0Lo8KkKlgIK5HbCLfCpsu8Bq3RKb+rfcRh5WC7vut2oAPZwieIyRP39joOROZrZZcal0NkNRmg/bJP2mvu/e0ozsvCCyM8fV5811EtBMbg0L7gHLKzW+Xz52gRI0Hm6L6t8C38xp+6g0sCwwyxnNslIt9n6WyukPfMWCOTdDAE9FbYdrP7/zW50ca5JDrK8RB1Cd/DeKp6oPKhmzXzCCkuCl3eShsIM8xewy1mbBhQ4sUgCl3eShsNkth3kobDZItvgAA/twtnf9WbQlb6TYemb4hn///CAgD+Ug1CtwtO0ErPgs9/+8fNjdWP/KTVaebMOl/z+nQOsTCshPFwq2YyftOxSCyINJ0mUm1Co6WUYo2nJTZhk3GniR5sXXJiXGpPq2TMvvkZOrdjkejx/TTL9+kYChC6SevIs7/MM+LhnQW3PWI07G5hDbrTLajvL/R/tCj69U43M4iuLvEDmYDWwbAFC+DE2nOzRTsUgzrB8YfAYKAwH8IeGTjT4wpeGWtluyvaIWLKO6jJsWVmuNZGiRSbMxf3P0jNBLtmW0tt2O6HlJfTzklQv4DiR3xKgvO50bcZ7TKgn37APj4MSdcnOE7ZcnbfZPUCYd64E7hLEijElu9JL7oMk5PyW2mF3y9hpP/MT5Zkz3tRYNOh5X+qZ0yn9eZYTEUgYXE3f35dVC0R+TWaRY8hd6wAAtfKR+5FD+KP3XA1aWW8Vx8NF/q9IQKKG5zcEvF7lf5u+4ddYllO2s6jtf860ADGnQOQO5k4DH7xCu5uPxf8g19WoNX2ZwwvgJw+1y4U6P3C/Qg5ETMxQBlDeJXvUnhtxd59yXlEVOeh1A5lqxtDd6qGwzXF8ygsPAJpHgGzdTIk139wQ8PSEBypJFnYfyvxLk10yRa/ULbcyitE5bpmV8Fs+Nqc8c7NGlksNWfHfOQFDtDlsFBl8f+u29Tod9ivre6I1ICE3Bc2UKASKxHQI34NRVAWK6awiAvkRTfORjMl2x2XP7FUO47OMZNssjSLwJlNnafRsoFN4vUuoY794+uSbjlzNlJjqRSLjqauILv3XJhuBb5p9VEdJGv9tpfRtJhYQwnQQy9gxudUMz4VaQPARZOlFBJTKYxHN4BBJAtBKTaHejC7GVw3TvPNVZgOgGjMGkOb3DRoMzVMqPu8/YaCLwDeLMTyhtQ+CsatKf1QF8F9es9XHYY4lsmTi+kD6WjPYXN/cpfGu7xlpNIKXJv+mJ7ZnurrCLJJIsIkmhX2GJn8iCDCKs4Vre1XMKK5JsResFaVavxdy/d/pImiP0DnlfPr1OMuR1PZ0M9HNKDl2HCG32MAPbAewehGBOvfQiaFPAClNHXR+p5GPBlxATFpvCk2k8V4lEoUyeq2LvXmToYGdFIDAgOfTBxNFsnUAwlsnBT9z6tZPqYKQvkHUVAx06pX72QNRY2lpAe6/pntJN2DQ/Sv2/CNJ3Wc731xcWhX6yJxkr2x2n4YDIWo0b1Py1e+JZC7qMeZA0khCFIOVMuVRDqErL/JXuLfW30ACX+mHQBDfBQANRyOYWRyla1l8fHLqLgpKDDjbcsrHJUeGqRWKjtC9iFf2RvsL2kGwOfnarnqjlDVrvHc/9fR/7XBCX+OkD5adrE9KkFUj+O5X59z7qjG/FxNescD/4Mp+mg8N7dFgy2+fWSaRHd96ZcBa1EDKqrsUOm9qPAIokTjLUX8oUvyjzb5nqPDWNH/tG28gpzvEw9Bjm92YXiTsGajjJpZB/fRIbwmQcyfDDdTpVvUl5+PVxRfsskicYJ4gSGJknc8oyFTt8nwjNF4ufO/BRCS+KRzHsUYqRccQzL0KBUD6fnDWiCEspIEYyBO2jNOBjZ639Mjvi7FdumnDVuxpCxZPDiK5xy/mpAkaT2PsHAbMhVwaP3PXuQbOII2cK0kd+/Tc4NAdXRjN1+fFAitI7Zq15WocJ0QY7LtVWY1PBlYOT0c2KA6x4zj03AJk4r8F6brRO2VBcW4p419gSyXdSlEgYb1//52vfRMIgcrHmKmzcB9JUYS4Mfnt7Xj26WGjx/avW/Cf3dXl/UNrsG8Gp0ZG4rKkGLSHSHmcUjTKdtnYt2BwrxZdkD3lYLHk9MCmoIUUrsudRNOW7/JhVtt/+ZuIznBURMknyhuN6D4PwUZgMP9aoN8hY/yvEtlUeRY/laP88OhNJgt6yJB5EpDMYYkTysIA22Xa5UIBujxhkt4o8D2tUNXl/00338iUD0PcKHwbKOBkBBi3FyHho35ltQdrWKfXBvmqGbigg5CdlnXSqwNxxvpX1Yh291prhYhtNvyjaC+KNHeU1yE4W+5t0fsX8/70Jz66OI1+hMV3lVwnxY03HcJ5pgAdNDZIx/lOtPZFvPgroG3okapGet8Ftylj3o3g66KeDvtsEgkmV/AhlX+gLtvJITr81vMU1/n293yXlfQEpHbvaTp6z3jS5z/Oz17T5iPOZLhNkym1eH7BXeOhIAzwfGbcz8XNpL1lVyuiUnT363fQ72ZudLnLFG5v6K/DbYsI7dchHv8J/7TwJqRQZ6R/3ylFYMs/qpKD9xVvelJzb2h9XqQP6TLUlpL4OQP6A68am1FCUuEuTvi0/NatPFrTCtETliDHwy4z5U1MTRGLjV2qDTizPz7qQmOdBsjl85cZctml5v9Yj3+ZHXul8bfYGPOlDFrwmLdmY/w405YTA93I+xQ1bsUPUU3ms4MtLyQfGfhivxMMSz0B19mkwKiBVqL5qfQf6XcxRyxGoNaI/ZU+Gk10dH9rsz4kewTb5BVOH356rnMhJ/BiXgknEo1OabaMGNeHR9KHpboC0S7HTu+IOPEcoFDk0F0TwjFzYZB6MnYqtpSXz5MuI4+zDxdD2GsEfzMmhy1JDf2fF/2+hANZ/Igrb7Q6OntLDy4yGz7sRJOduKrysZD3teFKd4z+NIJ/w+9S0O/Ty9wRDT/Qbepp2OIsJA0NbPR3cu/iVZP+OndtJUK/STC4tiwatabc1f555RUVoATfdjpAgf621wVUtB4BfBRZxfaBK2Vjg9MphsBcj42yQmRrftZXuWkksCFIkOPIRkmvFDwv32gezfO6pmt/F5LHrlrQdDzEvV5S7r3sV47bPNGj+Q25RR1erzvFddKqdrfedAzNSoOlnt2SK5K/e0cO+nvzS+5AcmRnWMlbWJ/KxzqiwnM8xj6j/FM++z9IqKStbXdgTEVeH2UIzwkzdXADRZ1pUKTXgR33OO1e7ywy2+68YGWoklZWHK8LXGYH9pKBHfXQvVxZtNsNYyeUNZTouyHd25aEHThclVkKmpqZMUKGvMSlCN4ZM8pAsMAltPddzZ6mOrEO7FMMz6ga7cm7IRisBKHF3YmKqD0IF3op4g8TQ/HkT0q5XNA9FT7TstJb8O4sBAo7RlQE4fwccLJtuaWKkQW3UQdetr7YrV5BN7ipj/7YqGElGh/mPLg1xc2zFPX9ax1lTbSNpGjfOKdiIUvOhb4189H9K5vmIx2cq2KHoRI18sZ18Q7eMMpECtu2j2PmBOZGuTMRs5QDO/4dym5yjMXKl+q8OtUf0pAIGBO29sjZVXLc8kSb57eB8KI8xN7sLXIp+vLY1zld7PDsEb3SGrnToSppdeTTckc2BOH5psx3+ITKgptbPUkB9q4f7FCZuzF1+Jw3bUcfHlUCSLIAM5aR5oBMvT8OU3T1V0lB+UlrxGzou6DUfgOiCwJZv7DgePIWfrww5lAi6auu86zm5FVNMK7RGyntVr+P60o5UwO2SYTl2zuQsoU9MD+EiHdOeGjPPVAURnzh+3vrq4zmK4rc2BV5OnL441yaFk2F7dK6RJIbuFDZXnZx7jo20sz0fk3eLfb6OUSpbxJawE6Y2UQUPIMl06HkuNiKTtkCk4vyNRh3I/euGIrdpcV76pAAhYZk8FIQ425Jo2kkQ8P2Q1NagtZDe6zqXCtwDkWe4ryL9etu3ewirfDtgC9271p6EkrbqBCXiL7OBCYw1lNxsowrvVi8LZkqYIYAZdcbol/RFcmzHWtN3LtdHmABDqgAnNgoj+1HiW2naw98nt+50o5ckFjoRZABmwDMa5I7VVMhukxsTNbYtbr68kCSGGbquECMN4g97/Et/0ldf10JTg/2mRAFellBR/FYk9wYygUIjmHEoPqpaHdW6JjeLRJtLFHeBSs9qxBSZu26WA/sUVDb9C7RjLVHLTEptQ61IkINCA4BZrohLS5rW+xuOvtfEWl4tpbyzBnemFT2Yc3nFkklON++Ba9XhUTIzn8NCtVTB9RwObxRy0EMUlPLvJgycuBdafKLjZKWSOGIWJuSrj4yLDZM3aayvjD+3aiLss8RO99sIwRLjt3Wd4TYTRJgw25OmEYD0j7/d6Hp8+gxYU1R/xsCr2qnTwdOgOSKWLX5TfdMwe8h3pWD7IXfrnXo1Dl7ynrPPNX7MNcViYL52OLpq8hvCZWaj+6kHD6ddHJVEbUnpaKVBgw2rCvccyGfghDec/etGbsCkLPJ9378yyfJYNkTz1xPPXQ88QMxJbFjigqrqFgYDTQdAntkrhsoUVpeTcu2mppFJ+i1TVd6mNrsJ7WiYkOlNFSjgxW8zPElEa4x0VhkO9kqg4cJl0MCaFfHEXrrww43jJhhE53rrjdfNxzTkzFMrulhPUDk+AMAQYaM31KUwXqDUnMocbxjCKvABOXzzanEuXtYcd4oKBi/6kyCXbhuE/fLRxzs5UDfwkP+DKBLxT69dPflkkBAikt93rwdtOgJDLA1s9PuQQ8Zf4iQPq5/O72Gyakoulp3tQw1u9HJdfYpK8HAeVGWAGKEvPSllSElxrSikKJBexA8NNsKVrF/cX/dARwx39JVg03R0NsTdRXLi8vslSgjGheLCGReD1ESViy9nhCeXNDfg1O4s38n5VF3JLZK6bthlD+/Gt1CBC34ea7aJLnPeTztr4k9ozlOm3MZaMEq6EH9aLLqi5aqrKXfCe8xrcrK/02NR16bAcs/ZGvrRfjc+NjZpCDrD1LEuuQl0//VtHJM/mU84RJnggkRMpeHvYdIOm6ePuxpO765PtZaPSbkDTL+qU119wAST78z9DMDMNc8WmYXC0EM9HwqRQQmFpghwurPr9KOobAbxKgv/mFsSMY41CpwhL4if3uxO+hm02Whar7DiHApzpwoFBFGuLubrlZocI4QpR+jPH8Kmhk8QJAAAAAAA=";
+
+const QUIZ_QUESTIONS = [
+  { id: 1, text: "Wie viele Gründer seid ihr?", type: "single", options: [{ label: "Allein", value: "solo" },{ label: "2 Personen", value: "zwei" },{ label: "3+ Personen", value: "mehr" }]},
+  { id: 2, text: "Wie wichtig ist dir Haftungsbeschränkung?", type: "single", options: [{ label: "Sehr wichtig", value: "hoch" },{ label: "Ganz nett", value: "mittel" },{ label: "Nicht wichtig", value: "niedrig" }]},
+  { id: 3, text: "Wie hoch ist euer geplantes Startkapital?", type: "single", options: [{ label: "< 1.000 €", value: "mini" },{ label: "1.000 – 12.500 €", value: "klein" },{ label: "> 12.500 €", value: "mittel" },{ label: "> 25.000 €", value: "gross" }]},
+  { id: 4, text: "Erwarteter Jahresumsatz in 12 Monaten?", type: "single", options: [{ label: "< 22.000 € (Kleinunternehmer)", value: "klein" },{ label: "22.000 – 100.000 €", value: "mittel" },{ label: "> 100.000 €", value: "gross" }]},
+  { id: 5, text: "Plant ihr externe Investoren?", type: "single", options: [{ label: "Ja, wahrscheinlich", value: "ja" },{ label: "Vielleicht später", value: "vielleicht" },{ label: "Nein", value: "nein" }]},
+  { id: 6, text: "Wie hoch ist euer Haftungsrisiko?", type: "single", options: [{ label: "Niedrig (Dienstleistung)", value: "niedrig" },{ label: "Mittel", value: "mittel" },{ label: "Hoch (Produkte, Verträge)", value: "hoch" }]},
+  { id: 7, text: "Seriöser Auftritt gegenüber B2B-Kunden?", type: "single", options: [{ label: "Sehr wichtig", value: "hoch" },{ label: "Mittel", value: "mittel" },{ label: "Nicht wichtig", value: "niedrig" }]},
+  { id: 8, text: "Möglichst wenig Bürokratie?", type: "single", options: [{ label: "Ja, minimal", value: "minimal" },{ label: "Egal", value: "egal" },{ label: "Aufwand ist ok", value: "ok" }]}
+];
+
+function calcRechtsformScores(answers) {
+  var s = { einzelunternehmen: 0, gbr: 0, ug: 0, gmbh: 0 };
+  if (answers[1]==="solo"){s.einzelunternehmen+=3;s.ug+=1}if(answers[1]==="zwei"){s.gbr+=3;s.ug+=2;s.gmbh+=1}if(answers[1]==="mehr"){s.gbr+=2;s.ug+=2;s.gmbh+=3}
+  if(answers[2]==="hoch"){s.ug+=3;s.gmbh+=3}if(answers[2]==="mittel"){s.ug+=2;s.gbr+=1;s.einzelunternehmen+=1}if(answers[2]==="niedrig"){s.einzelunternehmen+=3;s.gbr+=2}
+  if(answers[3]==="mini"){s.einzelunternehmen+=3;s.gbr+=2}if(answers[3]==="klein"){s.ug+=3;s.gbr+=1;s.einzelunternehmen+=1}if(answers[3]==="mittel"){s.ug+=2;s.gmbh+=2}if(answers[3]==="gross"){s.gmbh+=4;s.ug+=1}
+  if(answers[4]==="klein"){s.einzelunternehmen+=3;s.gbr+=2}if(answers[4]==="mittel"){s.ug+=2;s.gbr+=1;s.einzelunternehmen+=1}if(answers[4]==="gross"){s.gmbh+=3;s.ug+=2}
+  if(answers[5]==="ja"){s.gmbh+=4;s.ug+=1}if(answers[5]==="vielleicht"){s.ug+=2;s.gmbh+=2}if(answers[5]==="nein"){s.einzelunternehmen+=2;s.gbr+=2;s.ug+=1}
+  if(answers[6]==="niedrig"){s.einzelunternehmen+=2;s.gbr+=2}if(answers[6]==="mittel"){s.ug+=2;s.gbr+=1}if(answers[6]==="hoch"){s.ug+=3;s.gmbh+=3}
+  if(answers[7]==="hoch"){s.gmbh+=3;s.ug+=2}if(answers[7]==="mittel"){s.ug+=1;s.gbr+=1}if(answers[7]==="niedrig"){s.einzelunternehmen+=2;s.gbr+=1}
+  if(answers[8]==="minimal"){s.einzelunternehmen+=3;s.gbr+=2}if(answers[8]==="egal"){s.ug+=1;s.gbr+=1;s.einzelunternehmen+=1}if(answers[8]==="ok"){s.gmbh+=2;s.ug+=2}
+  return s;
+}
+
+const RECHTSFORM_INFO = {
+  einzelunternehmen: { name: "Einzelunternehmen / Freiberufler", kurz: "Maximale Einfachheit, sofort startklar.", farbe: "rgba(16,185,129,0.8)", gruende: ["Keine Mindestkapitalanforderung","Geringster bürokratischer Aufwand","Alle Gewinne gehören dir direkt"], risiken: ["Unbeschränkte persönliche Haftung","Weniger seriöser Auftritt","Schwieriger Investoren einzubinden"], naechsteSchritte: ["Gewerbeanmeldung (ca. 20–60 €)","Steuerliche Erfassung (ELSTER)","Geschäftskonto eröffnen","Kleinunternehmerregelung prüfen"], alternativeKey: "gbr" },
+  gbr: { name: "GbR (Gesellschaft bürgerlichen Rechts)", kurz: "Einfache Partnerschaft für 2+ Gründer.", farbe: "rgba(59,130,246,0.8)", gruende: ["Kein Mindestkapital","Flexibler Gesellschaftsvertrag","Geeignet für erste Projekte"], risiken: ["Gesamtschuldnerische Haftung","Bei Streit kompliziert","Weniger geeignet für Investoren"], naechsteSchritte: ["Gesellschaftsvertrag aufsetzen","Gewerbeanmeldung für alle","Geschäftskonto eröffnen","Steuerliche Erfassung"], alternativeKey: "ug" },
+  ug: { name: "UG (haftungsbeschränkt)", kurz: "Die kleine GmbH – Haftungsschutz ab 1 €.", farbe: "rgba(139,92,246,0.8)", gruende: ["Haftungsbeschränkung ab 1 €","Professioneller Auftritt","Günstige Alternative zur GmbH"], risiken: ["Notarkosten ca. 500–1.000 €","Pflicht zur Rücklagenbildung","Weniger Ansehen als GmbH"], naechsteSchritte: ["Gesellschaftsvertrag notariell beurkunden","Stammkapital einzahlen","Handelsregistereintrag","Gewerbeanmeldung + Steuer"], alternativeKey: "gmbh" },
+  gmbh: { name: "GmbH", kurz: "Die Königsklasse – seriös, investorenfreundlich.", farbe: "rgba(245,158,11,0.8)", gruende: ["Maximale Haftungsbeschränkung","Beste Voraussetzungen für VCs","Professionelle Governance"], risiken: ["Mindestkapital 25.000 €","Höchster bürokratischer Aufwand","Höhere laufende Kosten"], naechsteSchritte: ["Gesellschaftsvertrag beim Notar","25.000 € Stammkapital","Handelsregistereintrag","Geschäftsführervertrag","Steuerberater beauftragen"], alternativeKey: "ug" }
+};
+
+const DOC_CATEGORIES = {
+  pitch: { id: "pitch", name: "Pitch & Investor", icon: "🚀" },
+  planung: { id: "planung", name: "Planung", icon: "📊" },
+  markt: { id: "markt", name: "Markt & Validierung", icon: "📈" },
+  recht: { id: "recht", name: "Recht & Gründung", icon: "🛡" },
+  foerderung: { id: "foerderung", name: "Förderung", icon: "🏆" }
+};
+
+const DOCUMENT_TYPES = [
+  { id:"pitch-deck",title:"Pitch Deck",category:"pitch",description:"Präsentation für Investoren",rules:["investorsPlanned"],priority:10 },
+  { id:"one-pager",title:"One-Pager",category:"pitch",description:"Kompakte Übersicht",rules:["investorsPlanned"],priority:8 },
+  { id:"businessplan",title:"Businessplan",category:"planung",description:"Vollständiger Geschäftsplan",rules:["phase:validiert","phase:mvp","fundingWanted"],priority:9 },
+  { id:"finanzplan",title:"Finanzplan",category:"planung",description:"Umsatz- & Kostenplanung",rules:["fundingWanted","phase:mvp"],priority:9 },
+  { id:"konkurrenz",title:"Konkurrenzanalyse",category:"markt",description:"Wettbewerbs-Analyse",rules:["phase:validiert","phase:mvp"],priority:7 },
+  { id:"zielgruppe",title:"Zielgruppenanalyse",category:"markt",description:"Customer Personas",rules:["phase:idee","phase:validiert"],priority:6 },
+  { id:"gewerbe",title:"Gewerbeanmeldung",category:"recht",description:"Nachweis der Anmeldung",rules:["phase:gegruendet","phase:wachstum"],priority:8 },
+  { id:"gesellschaft",title:"Gesellschaftsvertrag",category:"recht",description:"Gründungsvertrag",rules:["teamSize:2+"],priority:8 },
+  { id:"impressum",title:"Impressum",category:"recht",description:"Für Website/Shop",rules:["phase:mvp","phase:gegruendet"],priority:5 },
+  { id:"datenschutz",title:"Datenschutzerklärung",category:"recht",description:"DSGVO-konform",rules:["phase:mvp","phase:gegruendet"],priority:5 },
+  { id:"foerder-check",title:"Förder-Checkliste",category:"foerderung",description:"Passende Programme",rules:["fundingWanted"],priority:6 },
+  { id:"antrag",title:"Antragsunterlagen",category:"foerderung",description:"Vollständige Bewerbung",rules:["fundingWanted"],priority:7 }
+];
+
+function getSuggestedDocTypes(userData) {
+  var phase = userData?.phase || "idee";
+  var teamSize = userData?.teamgroesse || 1;
+  var investorsPlanned = userData?.investoren || false;
+  var fundingWanted = userData?.foerderungen !== false;
+  return DOCUMENT_TYPES.map(function(dt) {
+    var score = dt.priority;
+    dt.rules.forEach(function(rule) {
+      if (rule === "investorsPlanned" && investorsPlanned) score += 5;
+      if (rule === "fundingWanted" && fundingWanted) score += 5;
+      if (rule === "phase:" + phase) score += 4;
+      if (rule === "teamSize:2+" && teamSize >= 2) score += 4;
+    });
+    return Object.assign({}, dt, { score: score, status: score >= 10 ? "empfohlen" : score >= 6 ? "wichtig" : "optional" });
+  }).sort(function(a, b) { return b.score - a.score; });
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// ICONS (inline SVG)
+// ═══════════════════════════════════════════════════════════════
+const _svg = (paths, s, cls) => React.createElement('svg', { xmlns:'http://www.w3.org/2000/svg', width:s||24, height:s||24, viewBox:'0 0 24 24', fill:'none', stroke:'currentColor', strokeWidth:'2', strokeLinecap:'round', strokeLinejoin:'round', className:cls||'' }, ...paths.map((p,i) => React.createElement(p[0], { key:i, ...p[1] })));
+const Search=({size:s=24,className:c=''})=>_svg([['circle',{cx:'11',cy:'11',r:'8'}],['path',{d:'m21 21-4.35-4.35'}]],s,c);
+const Map=({size:s=24,className:c=''})=>_svg([['polygon',{points:'1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6'}],['line',{x1:'8',y1:'2',x2:'8',y2:'18'}],['line',{x1:'16',y1:'6',x2:'16',y2:'22'}]],s,c);
+const CheckSquare=({size:s=24,className:c=''})=>_svg([['polyline',{points:'9 11 12 14 22 4'}],['path',{d:'M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11'}]],s,c);
+const FileText=({size:s=24,className:c=''})=>_svg([['path',{d:'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z'}],['polyline',{points:'14 2 14 8 20 8'}],['line',{x1:'16',y1:'13',x2:'8',y2:'13'}],['line',{x1:'16',y1:'17',x2:'8',y2:'17'}]],s,c);
+const ChevronRight=({size:s=24,className:c=''})=>_svg([['polyline',{points:'9 18 15 12 9 6'}]],s,c);
+const ChevronLeft=({size:s=24,className:c=''})=>_svg([['polyline',{points:'15 18 9 12 15 6'}]],s,c);
+const ChevronDown=({size:s=24,className:c=''})=>_svg([['polyline',{points:'6 9 12 15 18 9'}]],s,c);
+const ArrowRight=({size:s=24,className:c=''})=>_svg([['line',{x1:'5',y1:'12',x2:'19',y2:'12'}],['polyline',{points:'12 5 19 12 12 19'}]],s,c);
+const Check=({size:s=24,className:c=''})=>_svg([['polyline',{points:'20 6 9 17 4 12'}]],s,c);
+const Menu=({size:s=24,className:c=''})=>_svg([['line',{x1:'3',y1:'12',x2:'21',y2:'12'}],['line',{x1:'3',y1:'6',x2:'21',y2:'6'}],['line',{x1:'3',y1:'18',x2:'21',y2:'18'}]],s,c);
+const X=({size:s=24,className:c=''})=>_svg([['line',{x1:'18',y1:'6',x2:'6',y2:'18'}],['line',{x1:'6',y1:'6',x2:'18',y2:'18'}]],s,c);
+const Plus=({size:s=24,className:c=''})=>_svg([['line',{x1:'12',y1:'5',x2:'12',y2:'19'}],['line',{x1:'5',y1:'12',x2:'19',y2:'12'}]],s,c);
+const Minus=({size:s=24,className:c=''})=>_svg([['line',{x1:'5',y1:'12',x2:'19',y2:'12'}]],s,c);
+const Building=({size:s=24,className:c=''})=>_svg([['rect',{x:'4',y:'2',width:'16',height:'20',rx:'2',ry:'2'}],['path',{d:'M9 22v-4h6v4M8 7h.01M16 7h.01M12 7h.01M12 11h.01M12 15h.01M16 11h.01M16 15h.01M8 11h.01M8 15h.01'}]],s,c);
+const Target=({size:s=24,className:c=''})=>_svg([['circle',{cx:'12',cy:'12',r:'10'}],['circle',{cx:'12',cy:'12',r:'6'}],['circle',{cx:'12',cy:'12',r:'2'}]],s,c);
+const Rocket=({size:s=24,className:c=''})=>_svg([['path',{d:'M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z'}],['path',{d:'m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z'}],['path',{d:'M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5'}]],s,c);
+const Award=({size:s=24,className:c=''})=>_svg([['circle',{cx:'12',cy:'8',r:'7'}],['polyline',{points:'8.21 13.89 7 23 12 20 17 23 15.79 13.88'}]],s,c);
+const Sparkles=({size:s=24,className:c=''})=>_svg([['path',{d:'m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z'}],['path',{d:'M5 3v4M19 17v4M3 5h4M17 19h4'}]],s,c);
+const AlertCircle=({size:s=24,className:c=''})=>_svg([['circle',{cx:'12',cy:'12',r:'10'}],['line',{x1:'12',y1:'8',x2:'12',y2:'12'}],['line',{x1:'12',y1:'16',x2:'12.01',y2:'16'}]],s,c);
+const Upload=({size:s=24,className:c=''})=>_svg([['path',{d:'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4'}],['polyline',{points:'17 8 12 3 7 8'}],['line',{x1:'12',y1:'3',x2:'12',y2:'15'}]],s,c);
+const Folder=({size:s=24,className:c=''})=>_svg([['path',{d:'M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z'}]],s,c);
+const Trash2=({size:s=24,className:c=''})=>_svg([['polyline',{points:'3 6 5 6 21 6'}],['path',{d:'M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2'}],['line',{x1:'10',y1:'11',x2:'10',y2:'17'}],['line',{x1:'14',y1:'11',x2:'14',y2:'17'}]],s,c);
+const Download=({size:s=24,className:c=''})=>_svg([['path',{d:'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4'}],['polyline',{points:'7 10 12 15 17 10'}],['line',{x1:'12',y1:'15',x2:'12',y2:'3'}]],s,c);
+const Clock=({size:s=24,className:c=''})=>_svg([['circle',{cx:'12',cy:'12',r:'10'}],['polyline',{points:'12 6 12 12 16 14'}]],s,c);
+const BarChart2=({size:s=24,className:c=''})=>_svg([['line',{x1:'18',y1:'20',x2:'18',y2:'10'}],['line',{x1:'12',y1:'20',x2:'12',y2:'4'}],['line',{x1:'6',y1:'20',x2:'6',y2:'14'}]],s,c);
+const Loader2=({size:s=24,className:c=''})=>_svg([['path',{d:'M21 12a9 9 0 1 1-6.219-8.56'}]],s,c);
+const Shield=({size:s=24,className:c=''})=>_svg([['path',{d:'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z'}]],s,c);
+const TrendingUp=({size:s=24,className:c=''})=>_svg([['polyline',{points:'23 6 13.5 15.5 8.5 10.5 1 18'}],['polyline',{points:'17 6 23 6 23 12'}]],s,c);
+const BookOpen=({size:s=24,className:c=''})=>_svg([['path',{d:'M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z'}],['path',{d:'M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z'}]],s,c);
+const LogOut=({size:s=24,className:c=''})=>_svg([['path',{d:'M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4'}],['polyline',{points:'16 17 21 12 16 7'}],['line',{x1:'21',y1:'12',x2:'9',y2:'12'}]],s,c);
+const Mail=({size:s=24,className:c=''})=>_svg([['path',{d:'M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z'}],['polyline',{points:'22,6 12,13 2,6'}]],s,c);
+const Lock=({size:s=24,className:c=''})=>_svg([['rect',{x:'3',y:'11',width:'18',height:'11',rx:'2',ry:'2'}],['path',{d:'M7 11V7a5 5 0 0 1 10 0v4'}]],s,c);
+const User=({size:s=24,className:c=''})=>_svg([['path',{d:'M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2'}],['circle',{cx:'12',cy:'7',r:'4'}]],s,c);
+
+
+// ═══════════════════════════════════════════════════════════════
+// REUSABLE UI COMPONENTS
+// ═══════════════════════════════════════════════════════════════
+
+const Logo = ({ size = "sm" }) => React.createElement("img", { src: LOGO_SRC, alt: "CoFounder AI", style: { height: size === "sm" ? 48 : 64, width: "auto", objectFit: "contain", filter: "brightness(1.1) drop-shadow(0 0 6px rgba(139,92,246,0.25))" } });
+
+const GrainOverlay = () => React.createElement("div", { style: { position:"fixed",inset:0,zIndex:0,pointerEvents:"none", backgroundImage:'url("data:image/svg+xml,%3Csvg viewBox=\'0 0 256 256\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cfilter id=\'noise\'%3E%3CfeTurbulence type=\'fractalNoise\' baseFrequency=\'0.9\' numOctaves=\'4\' stitchTiles=\'stitch\'/%3E%3C/filter%3E%3Crect width=\'100%25\' height=\'100%25\' filter=\'url(%23noise)\' opacity=\'0.04\'/%3E%3C/svg%3E")', backgroundRepeat:"repeat",opacity:0.35 }});
+
+const GlassCard = ({ children, className="", style={}, onClick }) => React.createElement("div", { onClick, className: "rounded-2xl border border-white/10 backdrop-blur-md " + className + (onClick ? " cursor-pointer" : ""), style: { background:"rgba(255,255,255,0.04)", boxShadow:"0 4px 32px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.06)", ...style } }, children);
+
+const PrimaryButton = ({ children, onClick, disabled, loading, className="" }) => React.createElement("button", { onClick, disabled: disabled||loading, className: "relative px-6 py-3 rounded-xl font-semibold text-sm transition-all duration-300 flex items-center gap-2 " + className, style: { background:"linear-gradient(135deg, rgba(139,92,246,0.9), rgba(99,102,241,0.9))", boxShadow:"0 0 20px rgba(139,92,246,0.3)", color:"#fff", opacity:disabled?0.5:1 } }, loading && React.createElement(Loader2, { size:16, className:"animate-spin" }), children);
+
+const SecondaryButton = ({ children, onClick, className="" }) => React.createElement("button", { onClick, className: "px-6 py-3 rounded-xl font-semibold text-sm border border-white/20 text-white/80 transition-all duration-300 flex items-center gap-2 hover:border-violet-400/50 hover:text-white " + className, style: { background:"rgba(255,255,255,0.03)" } }, children);
+
+const ContainerFrame = ({ children, className="" }) => React.createElement("div", { className: "rounded-3xl border border-white/10 overflow-hidden " + className, style: { background:"rgba(10,10,18,0.8)", boxShadow:"0 0 0 1px rgba(255,255,255,0.04), 0 32px 80px rgba(0,0,0,0.6)" } }, children);
+
+const ProgressBar = ({ current, total }) => React.createElement("div", { className:"w-full" },
+  React.createElement("div", { className:"flex justify-between text-xs text-white/40 mb-2" },
+    React.createElement("span", null, "Schritt ", current, " von ", total),
+    React.createElement("span", null, Math.round((current/total)*100), "%")),
+  React.createElement("div", { className:"w-full h-1 rounded-full", style:{background:"rgba(255,255,255,0.08)"} },
+    React.createElement("div", { className:"h-1 rounded-full transition-all duration-500", style:{width:(current/total)*100+"%",background:"linear-gradient(90deg, rgba(139,92,246,1), rgba(99,102,241,1))",boxShadow:"0 0 8px rgba(139,92,246,0.6)"} })));
+
+const TileSelector = ({ options, selected, onSelect }) => React.createElement("div", { className:"flex flex-wrap gap-3" }, options.map(function(opt) {
+  return React.createElement("button", { key:opt.value, onClick:function(){onSelect(opt.value)}, className:"px-4 py-2 rounded-xl text-sm font-medium transition-all duration-200 border", style:{
+    borderColor:selected===opt.value?"rgba(139,92,246,0.8)":"rgba(255,255,255,0.12)",
+    background:selected===opt.value?"rgba(139,92,246,0.15)":"rgba(255,255,255,0.03)",
+    color:selected===opt.value?"#a78bfa":"rgba(255,255,255,0.6)"
+  }}, opt.label);
+}));
+
+const Toggle = ({ value, onChange, label }) => React.createElement("div", { className:"flex items-center justify-between" },
+  React.createElement("span", { className:"text-sm text-white/70" }, label),
+  React.createElement("button", { onClick:function(){onChange(!value)}, className:"relative w-11 h-6 rounded-full transition-all duration-300 flex-shrink-0", style:{ background:value?"linear-gradient(135deg, rgba(139,92,246,0.9), rgba(99,102,241,0.9))":"rgba(255,255,255,0.1)", boxShadow:value?"0 0 10px rgba(139,92,246,0.4)":"none" }},
+    React.createElement("span", { className:"absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-all duration-300", style:{transform:value?"translateX(20px)":"translateX(0)"} })));
+
+const ChecklistItem = ({ text, checked, onToggle }) => React.createElement("button", { onClick:onToggle, className:"flex items-center gap-3 w-full text-left py-2 group" },
+  React.createElement("div", { className:"w-5 h-5 rounded-md flex items-center justify-center flex-shrink-0 transition-all duration-200 border", style:{ borderColor:checked?"rgba(139,92,246,0.8)":"rgba(255,255,255,0.2)", background:checked?"rgba(139,92,246,0.2)":"transparent" }}, checked && React.createElement(Check, {size:12,color:"#a78bfa"})),
+  React.createElement("span", { className:"text-sm transition-all duration-200 " + (checked?"line-through text-white/30":"text-white/70 group-hover:text-white/90") }, text));
+
+
+// ═══════════════════════════════════════════════════════════════
+// AUTH PAGE (Login / Signup)
+// ═══════════════════════════════════════════════════════════════
+
+const AuthPage = ({ onSuccess }) => {
+  const [mode, setMode] = useState("login");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+
+  const handleSubmit = async function() {
+    setLoading(true); setError(""); setMessage("");
+    try {
+      if (mode === "login") {
+        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.auth.signUp({ email, password });
+        if (error) throw error;
+        setMessage("Bestätigungsmail gesendet! Bitte prüfe dein Postfach.");
+      }
+    } catch (e) {
+      setError(e.message === "Invalid login credentials" ? "Falsche E-Mail oder Passwort." : e.message);
+    }
+    setLoading(false);
+  };
+
+  return React.createElement("div", { className:"min-h-screen flex items-center justify-center p-6" },
+    React.createElement(ContainerFrame, { className:"max-w-md w-full" },
+      React.createElement("div", { className:"p-8" },
+        React.createElement("div", { className:"text-center mb-8" },
+          React.createElement(Logo, { size:"sm" }),
+          React.createElement("h2", { className:"text-2xl font-bold text-white mt-4 mb-2" }, mode === "login" ? "Willkommen zurück" : "Account erstellen"),
+          React.createElement("p", { className:"text-white/50 text-sm" }, mode === "login" ? "Melde dich an, um fortzufahren" : "Erstelle deinen kostenlosen Account")),
+        error && React.createElement("div", { className:"mb-4 p-3 rounded-xl text-sm text-red-300 border border-red-400/30", style:{background:"rgba(239,68,68,0.1)"} }, error),
+        message && React.createElement("div", { className:"mb-4 p-3 rounded-xl text-sm text-emerald-300 border border-emerald-400/30", style:{background:"rgba(16,185,129,0.1)"} }, message),
+        React.createElement("div", { className:"space-y-4" },
+          React.createElement("div", null,
+            React.createElement("label", { className:"text-xs text-white/50 uppercase tracking-wider mb-2 block" }, "E-Mail"),
+            React.createElement("div", { className:"relative" },
+              React.createElement(Mail, { size:16, className:"absolute left-3 top-1/2 -translate-y-1/2 text-white/30" }),
+              React.createElement("input", { type:"email", value:email, onChange:function(e){setEmail(e.target.value)}, placeholder:"dein@email.de", className:"w-full rounded-xl p-3 pl-10 text-sm text-white placeholder-white/25 outline-none transition-all duration-200", style:{background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.1)"}, onFocus:function(e){e.target.style.borderColor="rgba(139,92,246,0.5)"}, onBlur:function(e){e.target.style.borderColor="rgba(255,255,255,0.1)"} }))),
+          React.createElement("div", null,
+            React.createElement("label", { className:"text-xs text-white/50 uppercase tracking-wider mb-2 block" }, "Passwort"),
+            React.createElement("div", { className:"relative" },
+              React.createElement(Lock, { size:16, className:"absolute left-3 top-1/2 -translate-y-1/2 text-white/30" }),
+              React.createElement("input", { type:"password", value:password, onChange:function(e){setPassword(e.target.value)}, placeholder:"Mindestens 6 Zeichen", className:"w-full rounded-xl p-3 pl-10 text-sm text-white placeholder-white/25 outline-none transition-all duration-200", style:{background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.1)"}, onFocus:function(e){e.target.style.borderColor="rgba(139,92,246,0.5)"}, onBlur:function(e){e.target.style.borderColor="rgba(255,255,255,0.1)"}, onKeyDown:function(e){if(e.key==="Enter")handleSubmit()} }))),
+          React.createElement(PrimaryButton, { onClick:handleSubmit, disabled:!email||password.length<6, loading:loading, className:"w-full justify-center" }, mode === "login" ? "Anmelden" : "Registrieren"),
+          React.createElement("div", { className:"text-center" },
+            React.createElement("button", { onClick:function(){setMode(mode==="login"?"signup":"login");setError("");setMessage("")}, className:"text-sm text-violet-400 hover:text-violet-300 transition-colors" }, mode === "login" ? "Noch kein Account? Registrieren" : "Bereits registriert? Anmelden"))))));
+};
+
+
+// ═══════════════════════════════════════════════════════════════
+// ONBOARDING (saves to Supabase)
+// ═══════════════════════════════════════════════════════════════
+
+const Onboarding = ({ onComplete, onSkip }) => {
+  const { user } = useAuth();
+  const [step, setStep] = useState(1);
+  const [loading, setLoading] = useState(false);
+  const [success, setSuccess] = useState(false);
+  const [data, setData] = useState({ pitch:"",problem:"",zielgruppe:"",phase:"",businessplan:false,finanzplan:false,konkurrenz:false,preis:false,land:"Deutschland",bundesland:"",teamgroesse:1,investoren:false,rechtsform:false,kapitalbedarf:50000,branche:"",foerderungen:true,ziele:"" });
+  const update = function(key, val) { setData(function(prev) { return Object.assign({}, prev, { [key]: val }); }); };
+  const TOTAL = 5;
+
+  const handleSubmit = async function() {
+    setLoading(true);
+    if (user) await db.saveOnboarding(user.id, data);
+    setLoading(false);
+    setSuccess(true);
+    setTimeout(function() { onComplete(data); }, 1200);
+  };
+
+  const canNext = function() {
+    if (step===1) return data.pitch.length>10 && data.problem && data.zielgruppe && data.phase;
+    if (step===2) return true;
+    if (step===3) return data.bundesland;
+    if (step===4) return data.branche;
+    if (step===5) return data.ziele.length>5;
+    return true;
+  };
+
+  const titles = ["Startup Basics","Status-Check","Gründungs-Details","Förder-Fokus","Deine Ziele"];
+
+  const inputStyle = { background:"rgba(255,255,255,0.05)", border:"1px solid rgba(255,255,255,0.1)" };
+  const focusIn = function(e) { e.target.style.borderColor = "rgba(139,92,246,0.5)"; };
+  const focusOut = function(e) { e.target.style.borderColor = "rgba(255,255,255,0.1)"; };
+
+  return React.createElement("div", { className:"min-h-screen flex items-center justify-center p-6" },
+    React.createElement("div", { className:"w-full max-w-xl" },
+      React.createElement(ContainerFrame, null,
+        React.createElement("div", { className:"p-8" },
+          React.createElement("div", { className:"mb-8" },
+            React.createElement("div", { className:"flex items-center mb-6" }, React.createElement(Logo, { size:"sm" })),
+            React.createElement(ProgressBar, { current:step, total:TOTAL }),
+            React.createElement("h2", { className:"text-2xl font-bold text-white mt-5", style:{letterSpacing:"-0.02em"} }, titles[step-1])),
+
+          step === 1 && React.createElement("div", { className:"space-y-5" },
+            React.createElement("div", null, React.createElement("label", { className:"text-xs text-white/50 uppercase tracking-wider mb-2 block" }, "Elevator Pitch"),
+              React.createElement("textarea", { rows:3, value:data.pitch, onChange:function(e){update("pitch",e.target.value)}, placeholder:"Beschreibe dein Startup in 2–3 Sätzen...", className:"w-full rounded-xl p-3 text-sm text-white placeholder-white/25 outline-none resize-none transition-all duration-200", style:inputStyle, onFocus:focusIn, onBlur:focusOut })),
+            React.createElement("div", null, React.createElement("label", { className:"text-xs text-white/50 uppercase tracking-wider mb-2 block" }, "Problem, das du löst"),
+              React.createElement("input", { value:data.problem, onChange:function(e){update("problem",e.target.value)}, placeholder:"z.B. Gründer verlieren Zeit mit Behördenkram", className:"w-full rounded-xl p-3 text-sm text-white placeholder-white/25 outline-none transition-all duration-200", style:inputStyle, onFocus:focusIn, onBlur:focusOut })),
+            React.createElement("div", null, React.createElement("label", { className:"text-xs text-white/50 uppercase tracking-wider mb-2 block" }, "Zielgruppe"),
+              React.createElement("input", { value:data.zielgruppe, onChange:function(e){update("zielgruppe",e.target.value)}, placeholder:"z.B. Existenzgründer in Deutschland", className:"w-full rounded-xl p-3 text-sm text-white placeholder-white/25 outline-none transition-all duration-200", style:inputStyle, onFocus:focusIn, onBlur:focusOut })),
+            React.createElement("div", null, React.createElement("label", { className:"text-xs text-white/50 uppercase tracking-wider mb-2 block" }, "Aktuelle Phase"),
+              React.createElement(TileSelector, { options:[{value:"idee",label:"Idee"},{value:"validiert",label:"Validiert"},{value:"mvp",label:"MVP"},{value:"gegruendet",label:"Gegründet"},{value:"wachstum",label:"Wachstum"}], selected:data.phase, onSelect:function(v){update("phase",v)} }))),
+
+          step === 2 && React.createElement("div", { className:"space-y-4" },
+            React.createElement("p", { className:"text-white/50 text-sm mb-2" }, "Was hast du bereits vorbereitet?"),
+            [{key:"businessplan",label:"Businessplan vorhanden"},{key:"finanzplan",label:"Finanzplan vorhanden"},{key:"konkurrenz",label:"Konkurrenzanalyse vorhanden"},{key:"preis",label:"Preisstrategie vorhanden"}].map(function(item) {
+              return React.createElement(ChecklistItem, { key:item.key, text:item.label, checked:data[item.key], onToggle:function(){update(item.key,!data[item.key])} });
+            })),
+
+          step === 3 && React.createElement("div", { className:"space-y-5" },
+            React.createElement("div", null, React.createElement("label", { className:"text-xs text-white/50 uppercase tracking-wider mb-2 block" }, "Bundesland *"),
+              React.createElement("select", { value:data.bundesland, onChange:function(e){update("bundesland",e.target.value)}, className:"w-full rounded-xl p-3 text-sm text-white outline-none transition-all duration-200 appearance-none", style:Object.assign({}, inputStyle, {color:data.bundesland?"white":"rgba(255,255,255,0.3)"}) },
+                React.createElement("option", { value:"" }, "Bundesland wählen..."),
+                BUNDESLAENDER.map(function(b) { return React.createElement("option", { key:b, value:b, style:{background:"#111"} }, b); }))),
+            React.createElement("div", null, React.createElement("label", { className:"text-xs text-white/50 uppercase tracking-wider mb-2 block" }, "Teamgröße"),
+              React.createElement("div", { className:"flex items-center gap-4" },
+                React.createElement("button", { onClick:function(){update("teamgroesse",Math.max(1,data.teamgroesse-1))}, className:"w-9 h-9 rounded-xl border border-white/15 flex items-center justify-center text-white/60 hover:border-violet-400/40 transition-colors" }, React.createElement(Minus, {size:14})),
+                React.createElement("span", { className:"text-2xl font-bold text-white w-10 text-center" }, data.teamgroesse),
+                React.createElement("button", { onClick:function(){update("teamgroesse",data.teamgroesse+1)}, className:"w-9 h-9 rounded-xl border border-white/15 flex items-center justify-center text-white/60 hover:border-violet-400/40 transition-colors" }, React.createElement(Plus, {size:14})),
+                React.createElement("span", { className:"text-sm text-white/40" }, data.teamgroesse===1?"Person":"Personen"))),
+            React.createElement(Toggle, { value:data.investoren, onChange:function(v){update("investoren",v)}, label:"Investoren geplant?" }),
+            React.createElement(Toggle, { value:data.rechtsform, onChange:function(v){update("rechtsform",v)}, label:"Rechtsform bereits gewählt?" })),
+
+          step === 4 && React.createElement("div", { className:"space-y-6" },
+            React.createElement("div", null, React.createElement("label", { className:"text-xs text-white/50 uppercase tracking-wider mb-2 block" }, "Kapitalbedarf: ", React.createElement("span", { className:"text-violet-400" }, data.kapitalbedarf.toLocaleString("de-DE"), " €")),
+              React.createElement("input", { type:"range", min:5000, max:500000, step:5000, value:data.kapitalbedarf, onChange:function(e){update("kapitalbedarf",Number(e.target.value))}, className:"w-full h-1 rounded-full outline-none cursor-pointer", style:{accentColor:"#8b5cf6"} }),
+              React.createElement("div", { className:"flex justify-between text-xs text-white/25 mt-1" }, React.createElement("span",null,"5.000 €"), React.createElement("span",null,"500.000 €"))),
+            React.createElement("div", null, React.createElement("label", { className:"text-xs text-white/50 uppercase tracking-wider mb-2 block" }, "Branche *"),
+              React.createElement("select", { value:data.branche, onChange:function(e){update("branche",e.target.value)}, className:"w-full rounded-xl p-3 text-sm outline-none transition-all duration-200 appearance-none", style:Object.assign({}, inputStyle, {color:data.branche?"white":"rgba(255,255,255,0.3)"}) },
+                React.createElement("option", { value:"" }, "Branche wählen..."),
+                BRANCHEN.map(function(b) { return React.createElement("option", { key:b, value:b, style:{background:"#111"} }, b); }))),
+            React.createElement(Toggle, { value:data.foerderungen, onChange:function(v){update("foerderungen",v)}, label:"Passende Förderungen finden" })),
+
+          step === 5 && React.createElement("div", { className:"space-y-4" },
+            React.createElement("p", { className:"text-white/50 text-sm" }, "Was möchtest du in 90 Tagen erreichen?"),
+            React.createElement("textarea", { rows:5, value:data.ziele, onChange:function(e){update("ziele",e.target.value)}, placeholder:"z.B. Firma gründen, ersten Kunden gewinnen...", className:"w-full rounded-xl p-3 text-sm text-white placeholder-white/25 outline-none resize-none transition-all duration-200", style:inputStyle, onFocus:focusIn, onBlur:focusOut })),
+
+          React.createElement("div", { className:"flex items-center justify-between mt-8 pt-6 border-t border-white/8" },
+            React.createElement("div", { className:"flex items-center gap-4" },
+              React.createElement("button", { onClick:function(){if(step>1)setStep(function(s){return s-1})}, disabled:step===1, className:"flex items-center gap-2 text-sm text-white/40 hover:text-white/70 transition-colors disabled:opacity-20 disabled:pointer-events-none" }, React.createElement(ChevronLeft,{size:16}), " Zurück"),
+              React.createElement("button", { onClick:onSkip, className:"text-sm text-white/25 hover:text-white/50 transition-colors underline underline-offset-2" }, "Überspringen")),
+            step < TOTAL ?
+              React.createElement(PrimaryButton, { onClick:function(){setStep(function(s){return s+1})}, disabled:!canNext() }, "Weiter ", React.createElement(ChevronRight,{size:16})) :
+              React.createElement(PrimaryButton, { onClick:handleSubmit, disabled:!canNext()||success, loading:loading }, success ? React.createElement(React.Fragment, null, React.createElement(Check,{size:16}), " Fertig!") : React.createElement(React.Fragment, null, "Förderungen finden ", React.createElement(ArrowRight,{size:16}))))))));
+};
+
+
+// ═══════════════════════════════════════════════════════════════
+// DASHBOARD (loads from Supabase)
+// ═══════════════════════════════════════════════════════════════
+
+const Dashboard = function({ userData, onNavigate }) {
+  const { user } = useAuth();
+  const [onboardingData, setOnboardingData] = useState(null);
+  const [completedTasks, setCompletedTasks] = useState({});
+  const [loadingData, setLoadingData] = useState(true);
+
+  useEffect(function() {
+    if (!user) return;
+    (async function() {
+      var ob = await db.getOnboarding(user.id);
+      var ct = await db.getCompletedTasks(user.id);
+      setOnboardingData(ob);
+      setCompletedTasks(ct);
+      setLoadingData(false);
+    })();
+  }, [user]);
+
+  var allTasks = useMemo(function() { return generateIntelligentRoadmap(onboardingData || {}); }, [onboardingData]);
+
+  useEffect(function() {
+    if (!user || !allTasks.length) return;
+    var autoChecked = {};
+    allTasks.forEach(function(t) { if (t.autoChecked && !completedTasks[t.id]) autoChecked[t.id] = true; });
+    if (Object.keys(autoChecked).length > 0) {
+      var updated = Object.assign({}, completedTasks, autoChecked);
+      setCompletedTasks(updated);
+      Object.keys(autoChecked).forEach(function(tid) { db.toggleTask(user.id, tid, true); });
+    }
+  }, [allTasks]);
+
+  var toggleTask = function(taskId) {
+    var isNowCompleted = !completedTasks[taskId];
+    setCompletedTasks(function(prev) { var next = Object.assign({}, prev); if (next[taskId]) delete next[taskId]; else next[taskId] = true; return next; });
+    if (user) db.toggleTask(user.id, taskId, isNowCompleted);
+  };
+
+  if (loadingData) return React.createElement("div", { className:"max-w-3xl mx-auto py-20 px-6 text-center" },
+    React.createElement(Loader2, { size:32, className:"animate-spin text-violet-400 mx-auto mb-4" }),
+    React.createElement("p", { className:"text-white/40" }, "Daten werden geladen..."));
+
+  if (!onboardingData || !onboardingData.onboarding_complete) return React.createElement("div", { className:"max-w-3xl mx-auto py-20 px-6" },
+    React.createElement(GlassCard, { className:"p-8 text-center" },
+      React.createElement("div", { className:"w-16 h-16 rounded-2xl mx-auto mb-4 flex items-center justify-center", style:{background:"rgba(139,92,246,.15)"} },
+        React.createElement(Rocket, { size:32, className:"text-violet-400" })),
+      React.createElement("h2", { className:"text-2xl font-bold text-white mb-2" }, "Noch kein Profil"),
+      React.createElement("p", { className:"text-white/50 mb-6" }, "Starte das Onboarding, damit wir deine 90-Tage-Roadmap erstellen."),
+      React.createElement(SecondaryButton, { onClick:function(){window.location.reload()}, className:"mx-auto" }, "Onboarding starten ", React.createElement(ArrowRight,{size:16}))));
+
+  var totalTasks = allTasks.length;
+  var doneTasks = allTasks.filter(function(t) { return completedTasks[t.id]; }).length;
+  var progress = totalTasks > 0 ? Math.round((doneTasks/totalTasks)*100) : 0;
+  var tasksByWeek = [];
+  for (var w = 1; w <= 12; w++) { var wt = allTasks.filter(function(t){return t.week===w}); if(wt.length>0) tasksByWeek.push({week:w,tasks:wt}); }
+  var milestones = [{pct:25,label:"Grundlagen"},{pct:50,label:"Gründung ready"},{pct:75,label:"Förderung & Setup"},{pct:100,label:"Startklar"}];
+
+  return React.createElement("div", { className:"max-w-5xl mx-auto py-10 px-6" },
+    React.createElement("div", { className:"mb-8" },
+      React.createElement("h1", { className:"text-3xl font-bold text-white mb-1", style:{letterSpacing:"-0.02em"} }, "Deine 90-Tage-Roadmap"),
+      React.createElement("p", { className:"text-white/45 text-sm" }, "Automatisch erstellt aus deinem Onboarding")),
+
+    React.createElement(GlassCard, { className:"p-6 mb-6", style:{borderColor:"rgba(139,92,246,.25)",background:"rgba(139,92,246,.05)"} },
+      React.createElement("div", { className:"flex items-center justify-between mb-4" },
+        React.createElement("div", null,
+          React.createElement("p", { className:"text-xs text-violet-400 uppercase tracking-wider mb-1" }, "Fortschritt"),
+          React.createElement("p", { className:"text-3xl font-bold text-white" }, progress+"% ", React.createElement("span",{className:"text-base text-white/35 font-normal"},"geschafft"))),
+        React.createElement("div", { className:"text-right" },
+          React.createElement("p", { className:"text-white/40 text-xs mb-0.5" }, "Aufgaben"),
+          React.createElement("p", { className:"text-2xl font-bold text-white" }, doneTasks+"/"+totalTasks))),
+      React.createElement("div", { className:"relative" },
+        React.createElement("div", { className:"w-full h-3 rounded-full", style:{background:"rgba(255,255,255,.07)"} },
+          React.createElement("div", { className:"h-3 rounded-full transition-all duration-700", style:{width:progress+"%",background:"linear-gradient(90deg,#8b5cf6,#6366f1)",boxShadow:"0 0 12px rgba(139,92,246,.5)"} })),
+        React.createElement("div", { className:"flex justify-between mt-3" }, milestones.map(function(m) {
+          return React.createElement("div", { key:m.pct, className:"flex flex-col items-center", style:{width:"25%"} },
+            React.createElement("div", { className:"w-2 h-2 rounded-full mb-1 transition-all "+(progress>=m.pct?"bg-violet-400 ring-4 ring-violet-400/20":"bg-white/20") }),
+            React.createElement("p", { className:"text-xs transition-colors "+(progress>=m.pct?"text-violet-300 font-medium":"text-white/30") }, m.label));
+        })))),
+
+    React.createElement("div", { className:"grid grid-cols-3 gap-3 mb-8" },
+      React.createElement("button", { onClick:function(){onNavigate("dokumente")}, className:"p-4 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 transition-all text-left" },
+        React.createElement(Upload, {size:18,className:"text-violet-400 mb-2"}), React.createElement("p",{className:"text-white/90 font-medium text-sm"},"Dokument hochladen")),
+      React.createElement("button", { onClick:function(){onNavigate("gewerbe")}, className:"p-4 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 transition-all text-left" },
+        React.createElement(Building, {size:18,className:"text-violet-400 mb-2"}), React.createElement("p",{className:"text-white/90 font-medium text-sm"},"Rechtsform-Quiz")),
+      React.createElement("button", { onClick:function(){onNavigate("foerderprogramme")}, className:"p-4 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 transition-all text-left" },
+        React.createElement(Award, {size:18,className:"text-violet-400 mb-2"}), React.createElement("p",{className:"text-white/90 font-medium text-sm"},"Förderung prüfen"))),
+
+    React.createElement("div", { className:"space-y-4" }, tasksByWeek.map(function(wd) {
+      return React.createElement(RoadmapWeekBlock, { key:wd.week, week:wd.week, tasks:wd.tasks, completedTasks:completedTasks, onToggle:toggleTask, onNavigate:onNavigate });
+    })));
+};
+
+
+// ═══════════════════════════════════════════════════════════════
+// ROADMAP WEEK BLOCK & TASK ROW
+// ═══════════════════════════════════════════════════════════════
+
+const RoadmapWeekBlock = function(props) {
+  var openState = useState(props.week <= 4); var isOpen = openState[0]; var setOpen = openState[1];
+  var doneCount = props.tasks.filter(function(t){return props.completedTasks[t.id]}).length;
+  var allDone = doneCount === props.tasks.length;
+  var cc = {"Recht & Gründung":"text-blue-400 bg-blue-500/10 border-blue-400/30","Finanzierung & Förderung":"text-emerald-400 bg-emerald-500/10 border-emerald-400/30","Unterlagen":"text-amber-400 bg-amber-500/10 border-amber-400/30","Markt & Produkt":"text-violet-400 bg-violet-500/10 border-violet-400/30"};
+  return React.createElement(GlassCard, { className:"overflow-hidden" },
+    React.createElement("button", { onClick:function(){setOpen(!isOpen)}, className:"w-full p-5 flex items-center justify-between hover:bg-white/5 transition-all" },
+      React.createElement("div", { className:"flex items-center gap-4" },
+        React.createElement("div", { className:"w-12 h-12 rounded-xl flex items-center justify-center font-bold text-lg "+(allDone?"bg-emerald-500/20 text-emerald-400":"bg-violet-500/10 text-violet-300") }, String(props.week)),
+        React.createElement("div", { className:"text-left" }, React.createElement("p",{className:"text-white font-semibold"},"Woche "+props.week), React.createElement("p",{className:"text-white/40 text-sm"},doneCount+"/"+props.tasks.length+" erledigt"))),
+      React.createElement("div", { className:"flex items-center gap-3" }, allDone && React.createElement(Check,{size:20,className:"text-emerald-400"}),
+        React.createElement(ChevronDown, { size:20, className:"text-white/40 transition-transform "+(isOpen?"rotate-180":"") }))),
+    isOpen && React.createElement("div", { className:"px-5 pb-5 space-y-2" }, props.tasks.map(function(task) {
+      return React.createElement(RoadmapTaskRow, { key:task.id, task:task, completed:props.completedTasks[task.id], onToggle:function(){props.onToggle(task.id)}, onOpen:function(){props.onNavigate(task.link.replace("/",""))}, categoryColor:cc[task.category] });
+    })));
+};
+
+const RoadmapTaskRow = function(props) {
+  var pc = {hoch:"bg-red-500/10 text-red-400 border-red-400/30",mittel:"bg-amber-500/10 text-amber-400 border-amber-400/30",optional:"bg-white/5 text-white/40 border-white/10"};
+  var pl = props.task.priority==="hoch"?"Priorität: Hoch":props.task.priority==="mittel"?"Mittel":"Optional";
+  return React.createElement("div", { className:"flex items-start gap-3 p-3 rounded-xl transition-all "+(props.completed?"bg-white/5 opacity-60":"hover:bg-white/5") },
+    React.createElement("button", { onClick:props.onToggle, className:"mt-0.5 w-5 h-5 rounded border-2 flex items-center justify-center flex-shrink-0 transition-all "+(props.completed?"bg-violet-500/20 border-violet-400":"border-white/20 hover:border-violet-400/50") }, props.completed && React.createElement(Check,{size:12,className:"text-violet-300"})),
+    React.createElement("div", { className:"flex-1 min-w-0" },
+      React.createElement("p", { className:"text-sm font-medium transition-all "+(props.completed?"text-white/30 line-through":"text-white/90") }, props.task.title),
+      React.createElement("p", { className:"text-xs text-white/40 mt-0.5" }, props.task.description),
+      React.createElement("div", { className:"flex flex-wrap gap-2 mt-2" },
+        React.createElement("span", { className:"text-xs px-2 py-0.5 rounded-full border "+props.categoryColor }, props.task.category),
+        React.createElement("span", { className:"text-xs px-2 py-0.5 rounded-full border "+pc[props.task.priority] }, pl),
+        React.createElement("span", { className:"text-xs px-2 py-0.5 rounded-full bg-white/5 text-white/40 border border-white/10" }, "⏱ "+props.task.effort))),
+    !props.completed && props.task.link!=="/dashboard" && React.createElement("button", { onClick:props.onOpen, className:"flex-shrink-0 px-3 py-1.5 rounded-lg text-xs font-medium bg-violet-500/10 text-violet-300 border border-violet-400/30 hover:bg-violet-500/20 transition-all" }, "Öffnen"));
+};
+
+
+// ═══════════════════════════════════════════════════════════════
+// RECHTSFORM QUIZ (saves to Supabase)
+// ═══════════════════════════════════════════════════════════════
+
+const RechtsformQuiz = ({ onClose }) => {
+  const { user } = useAuth();
+  var stState = useState("start"); var quizState = stState[0]; var setQuizState = stState[1];
+  var stepState = useState(1); var step = stepState[0]; var setStep = stepState[1];
+  var ansState = useState({}); var answers = ansState[0]; var setAnswers = ansState[1];
+  var resState = useState(null); var result = resState[0]; var setResult = resState[1];
+  var savState = useState(false); var saved = savState[0]; var setSaved = savState[1];
+  var TOTAL = QUIZ_QUESTIONS.length;
+  var currentQ = QUIZ_QUESTIONS[step-1];
+  var hasAnswer = answers[currentQ?.id] !== undefined;
+
+  var handleAnswer = function(qId, value) { setAnswers(function(p) { return Object.assign({}, p, {[qId]:value}); }); };
+  var handleFinish = function() {
+    var scores = calcRechtsformScores(answers);
+    var sorted = Object.entries(scores).sort(function(a,b){return b[1]-a[1]});
+    var topKey = sorted[0][0]; var topScore = sorted[0][1];
+    var confidence = topScore>=18?"Hoch":topScore>=12?"Mittel":"Niedrig";
+    var confColor = confidence==="Hoch"?"text-emerald-400":confidence==="Mittel"?"text-amber-400":"text-red-400";
+    var altKey = RECHTSFORM_INFO[topKey].alternativeKey;
+    setResult({topKey:topKey,altKey:altKey,scores:scores,confidence:confidence,confColor:confColor});
+    setQuizState("result");
+    if (user) db.saveQuizResult(user.id, answers, topKey, scores, confidence);
+  };
+
+  if (quizState === "start") return React.createElement("div", { className:"space-y-6" },
+    React.createElement("div", { className:"text-center py-6" },
+      React.createElement("div", { className:"w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4", style:{background:"linear-gradient(135deg, rgba(139,92,246,0.2), rgba(99,102,241,0.1))",border:"1px solid rgba(139,92,246,0.3)"} }, React.createElement(Building,{size:28,className:"text-violet-400"})),
+      React.createElement("h2", { className:"text-2xl font-bold text-white mb-2" }, "Rechtsform-Quiz"),
+      React.createElement("p", { className:"text-white/50 text-sm max-w-md mx-auto" }, "8 Fragen → persönliche Empfehlung")),
+    React.createElement("div", { className:"flex gap-3 justify-center" },
+      React.createElement(PrimaryButton, { onClick:function(){setQuizState("quiz")}, className:"px-8" }, "Quiz starten ", React.createElement(ArrowRight,{size:16})),
+      React.createElement(SecondaryButton, { onClick:onClose }, "Abbrechen")));
+
+  if (quizState === "quiz") return React.createElement("div", { className:"space-y-6" },
+    React.createElement("div", null,
+      React.createElement("div", { className:"flex justify-between text-xs text-white/40 mb-2" }, React.createElement("span",null,"Frage ",step," von ",TOTAL), React.createElement("span",null,Math.round((step/TOTAL)*100),"%")),
+      React.createElement("div", { className:"w-full h-1 rounded-full", style:{background:"rgba(255,255,255,0.08)"} },
+        React.createElement("div", { className:"h-1 rounded-full transition-all duration-500", style:{width:(step/TOTAL)*100+"%",background:"linear-gradient(90deg, rgba(139,92,246,1), rgba(99,102,241,1))"} }))),
+    React.createElement(GlassCard, { className:"p-6" },
+      React.createElement("p", { className:"text-white font-semibold text-lg mb-5" }, currentQ.text),
+      React.createElement("div", { className:"space-y-3" }, currentQ.options.map(function(opt) {
+        var sel = answers[currentQ.id] === opt.value;
+        return React.createElement("button", { key:opt.value, onClick:function(){handleAnswer(currentQ.id,opt.value)}, className:"w-full text-left px-4 py-3 rounded-xl border transition-all duration-200 flex items-center gap-3", style:{borderColor:sel?"rgba(139,92,246,0.7)":"rgba(255,255,255,0.1)",background:sel?"rgba(139,92,246,0.12)":"rgba(255,255,255,0.03)"} },
+          React.createElement("div", { className:"w-5 h-5 rounded-full border flex items-center justify-center flex-shrink-0", style:{borderColor:sel?"rgba(139,92,246,0.8)":"rgba(255,255,255,0.2)",background:sel?"rgba(139,92,246,0.3)":"transparent"} }, sel && React.createElement("div",{className:"w-2 h-2 rounded-full bg-violet-400"})),
+          React.createElement("span", { className:"text-sm font-medium "+(sel?"text-white":"text-white/60") }, opt.label));
+      }))),
+    React.createElement("div", { className:"flex items-center justify-between" },
+      React.createElement("button", { onClick:function(){if(step>1)setStep(function(s){return s-1});else setQuizState("start")}, className:"flex items-center gap-2 text-sm text-white/40 hover:text-white/70 transition-colors" }, React.createElement(ChevronLeft,{size:16}), " Zurück"),
+      step < TOTAL ?
+        React.createElement(PrimaryButton, { onClick:function(){setStep(function(s){return s+1})}, disabled:!hasAnswer }, "Weiter ", React.createElement(ChevronRight,{size:16})) :
+        React.createElement(PrimaryButton, { onClick:handleFinish, disabled:!hasAnswer }, "Ergebnis ", React.createElement(Sparkles,{size:16}))));
+
+  if (quizState === "result" && result) {
+    var top = RECHTSFORM_INFO[result.topKey]; var alt = RECHTSFORM_INFO[result.altKey];
+    return React.createElement("div", { className:"space-y-5" },
+      React.createElement(GlassCard, { className:"p-6", style:{borderColor:top.farbe.replace("0.8","0.4")} },
+        React.createElement("div", { className:"flex items-start justify-between mb-2" },
+          React.createElement("div", null,
+            React.createElement("p", { className:"text-xs text-white/40 uppercase tracking-wider mb-1" }, "Empfohlene Rechtsform"),
+            React.createElement("h3", { className:"text-2xl font-bold text-white" }, top.name),
+            React.createElement("p", { className:"text-white/50 text-sm mt-1" }, top.kurz)),
+          React.createElement("div", { className:"text-right" },
+            React.createElement("p", { className:"text-xs text-white/40 mb-1" }, "Passung"),
+            React.createElement("p", { className:"text-lg font-bold "+result.confColor }, result.confidence))),
+        React.createElement("div", { className:"mt-4 space-y-2" }, Object.entries(result.scores).sort(function(a,b){return b[1]-a[1]}).map(function(entry) {
+          var max = Math.max.apply(null, Object.values(result.scores));
+          return React.createElement("div", { key:entry[0], className:"flex items-center gap-3" },
+            React.createElement("span", { className:"text-xs text-white/40 w-32 flex-shrink-0" }, RECHTSFORM_INFO[entry[0]].name.split("(")[0].trim()),
+            React.createElement("div", { className:"flex-1 h-1.5 rounded-full", style:{background:"rgba(255,255,255,0.06)"} },
+              React.createElement("div", { className:"h-1.5 rounded-full transition-all duration-700", style:{width:(entry[1]/max)*100+"%",background:entry[0]===result.topKey?top.farbe:"rgba(255,255,255,0.15)"} })),
+            React.createElement("span", { className:"text-xs text-white/30 w-6 text-right" }, entry[1]));
+        }))),
+      React.createElement("div", { className:"grid md:grid-cols-2 gap-4" },
+        React.createElement(GlassCard, { className:"p-5" },
+          React.createElement("p", { className:"text-xs text-white/40 uppercase tracking-wider mb-3" }, "✓ 3 Gründe dafür"),
+          React.createElement("div", { className:"space-y-2" }, top.gruende.map(function(g,i) { return React.createElement("div",{key:i,className:"flex items-start gap-2 text-sm text-white/65"},React.createElement("span",{className:"text-emerald-400 mt-0.5 flex-shrink-0"},"✓"),g); }))),
+        React.createElement(GlassCard, { className:"p-5" },
+          React.createElement("p", { className:"text-xs text-white/40 uppercase tracking-wider mb-3" }, "⚠ Trade-offs"),
+          React.createElement("div", { className:"space-y-2" }, top.risiken.map(function(r,i) { return React.createElement("div",{key:i,className:"flex items-start gap-2 text-sm text-white/65"},React.createElement("span",{className:"text-amber-400 mt-0.5 flex-shrink-0"},"⚠"),r); })))),
+      React.createElement(GlassCard, { className:"p-5" },
+        React.createElement("p", { className:"text-xs text-white/40 uppercase tracking-wider mb-3" }, "Nächste Schritte"),
+        React.createElement("div", { className:"space-y-2" }, top.naechsteSchritte.map(function(s,i) { return React.createElement("div",{key:i,className:"flex items-center gap-3 text-sm text-white/65"},React.createElement("div",{className:"w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0",style:{background:"rgba(139,92,246,0.2)",color:"#a78bfa"}},i+1),s); }))),
+      React.createElement("div", { className:"rounded-xl p-4 flex items-start gap-3", style:{background:"rgba(245,158,11,0.06)",border:"1px solid rgba(245,158,11,0.15)"} },
+        React.createElement(AlertCircle, { size:14, className:"text-amber-400 mt-0.5 flex-shrink-0" }),
+        React.createElement("p", { className:"text-xs text-amber-300/70" }, React.createElement("strong",{className:"text-amber-300"},"Kein Ersatz für Rechtsberatung."), " Bitte mit Steuerberater prüfen.")),
+      React.createElement("div", { className:"flex flex-wrap gap-3 pt-2" },
+        React.createElement(PrimaryButton, { onClick:function(){setSaved(true)}, className:saved?"opacity-70":"" }, saved ? React.createElement(React.Fragment,null,React.createElement(Check,{size:14})," Gespeichert") : React.createElement(React.Fragment,null,React.createElement(BookOpen,{size:14})," Ergebnis speichern")),
+        React.createElement("button", { onClick:function(){setQuizState("start");setStep(1);setAnswers({});setResult(null);setSaved(false)}, className:"text-sm text-white/35 hover:text-white/60 transition-colors underline underline-offset-2 ml-auto" }, "Quiz wiederholen")),
+      React.createElement("div", { className:"flex justify-end pt-2" },
+        React.createElement(SecondaryButton, { onClick:onClose }, "← Zurück zum Dashboard")));
+  }
+  return null;
+};
+
+
+// ═══════════════════════════════════════════════════════════════
+// GEWERBE PAGE
+// ═══════════════════════════════════════════════════════════════
+
+const GewerbePage = () => {
+  const { user } = useAuth();
+  var qState = useState(false); var showQuiz = qState[0]; var setShowQuiz = qState[1];
+  var selState = useState(null); var selectedForm = selState[0]; var setSelectedForm = selState[1];
+  var compState = useState({}); var completedSteps = compState[0]; var setCompletedSteps = compState[1];
+  var loadState = useState(true); var isLoading = loadState[0]; var setIsLoading = loadState[1];
+  var profileState = useState(null); var profile = profileState[0]; var setProfile = profileState[1];
+
+  useEffect(function() {
+    if (!user) return;
+    (async function() {
+      var ct = await db.getCompletedTasks(user.id);
+      setCompletedSteps(ct);
+      var ob = await db.getOnboarding(user.id);
+      setProfile(ob);
+      setIsLoading(false);
+    })();
+  }, [user]);
+
+  var toggleStep = function(stepId) {
+    var isNow = !completedSteps[stepId];
+    setCompletedSteps(function(prev) { var n = Object.assign({}, prev); if (n[stepId]) delete n[stepId]; else n[stepId] = true; return n; });
+    if (user) db.toggleTask(user.id, stepId, isNow);
+  };
+
+  var suggestedForm = useMemo(function() {
+    if (!profile) return null;
+    if (profile.phase === "idee" || profile.phase === "validiert") return "einzelunternehmen";
+    if (profile.teamgroesse >= 2 && !profile.investoren) return "gbr";
+    if (profile.investoren && profile.kapitalbedarf >= 25000) return "gmbh";
+    if (profile.investoren) return "ug";
+    return "einzelunternehmen";
+  }, [profile]);
+
+  if (showQuiz) return React.createElement("div", { className:"max-w-2xl mx-auto py-10 px-6" },
+    React.createElement("button", { onClick:function(){setShowQuiz(false)}, className:"mb-5 flex items-center gap-2 text-sm text-white/40 hover:text-white/70" }, React.createElement(ChevronLeft,{size:16}), " Zurück"),
+    React.createElement(RechtsformQuiz, { onClose:function(){setShowQuiz(false)} }));
+
+  var renderChecklist = function(formKey) {
+    var cl = GEWERBE_CHECKLISTS[formKey];
+    if (!cl) return null;
+    var done = cl.steps.filter(function(s){return completedSteps[s.id]}).length;
+    var pct = Math.round((done/cl.steps.length)*100);
+    return React.createElement("div", { key:formKey, className:"space-y-4" },
+      React.createElement("div", { className:"flex items-center justify-between mb-2" },
+        React.createElement("h3", { className:"text-xl font-bold text-white" }, cl.label),
+        React.createElement("span", { className:"text-sm font-medium "+(pct===100?"text-emerald-400":"text-violet-300") }, pct+"% erledigt")),
+      React.createElement("div", { className:"w-full h-2 rounded-full mb-4", style:{background:"rgba(255,255,255,0.08)"} },
+        React.createElement("div", { className:"h-2 rounded-full transition-all duration-500", style:{width:pct+"%",background:pct===100?"linear-gradient(90deg,#10b981,#059669)":"linear-gradient(90deg,#8b5cf6,#6366f1)",boxShadow:pct===100?"0 0 10px rgba(16,185,129,0.4)":"0 0 10px rgba(139,92,246,0.4)"} })),
+      React.createElement("div", { className:"space-y-3" }, cl.steps.map(function(step, idx) {
+        var isDone = completedSteps[step.id];
+        return React.createElement(GlassCard, { key:step.id, className:"p-4 transition-all "+(isDone?"opacity-70":"hover:border-violet-400/20") },
+          React.createElement("div", { className:"flex items-start gap-3" },
+            React.createElement("button", { onClick:function(){toggleStep(step.id)}, className:"mt-0.5 w-6 h-6 rounded-lg border-2 flex items-center justify-center flex-shrink-0 transition-all "+(isDone?"bg-violet-500/20 border-violet-400":"border-white/20 hover:border-violet-400/50") },
+              isDone && React.createElement(Check, {size:14,className:"text-violet-300"})),
+            React.createElement("div", { className:"flex-1 min-w-0" },
+              React.createElement("div", { className:"flex items-center gap-2 flex-wrap" },
+                React.createElement("p", { className:"font-medium text-sm "+(isDone?"line-through text-white/40":"text-white/90") }, (idx+1)+". "+step.title),
+                React.createElement("span", { className:"text-xs px-2 py-0.5 rounded-full bg-white/5 text-white/40 border border-white/10" }, "⏱ "+step.zeit)),
+              React.createElement("p", { className:"text-xs text-white/45 mt-1" }, step.desc),
+              step.link && !isDone && React.createElement("a", { href:step.link, target:"_blank", rel:"noopener noreferrer", className:"inline-flex items-center gap-1 text-xs text-violet-400 hover:text-violet-300 mt-2 transition-colors" }, "Extern öffnen ", React.createElement(ArrowRight,{size:10})))));
+      })));
+  };
+
+  return React.createElement("div", { className:"max-w-5xl mx-auto py-10 px-6 space-y-10" },
+    React.createElement("div", null,
+      React.createElement("h1", { className:"text-3xl font-bold text-white mb-2" }, "Gewerbeanmeldung"),
+      React.createElement("p", { className:"text-white/45 text-sm mb-6" }, "Rechtsform wählen und Schritt für Schritt vorbereiten")),
+
+    React.createElement(GlassCard, { className:"p-5 cursor-pointer hover:border-violet-400/20 transition-all", onClick:function(){setShowQuiz(true)} },
+      React.createElement("div", { className:"flex items-center justify-between" },
+        React.createElement("div", { className:"flex items-center gap-4" },
+          React.createElement("div", { className:"w-12 h-12 rounded-xl flex items-center justify-center", style:{background:"rgba(139,92,246,.15)"} }, React.createElement(Building,{size:22,className:"text-violet-400"})),
+          React.createElement("div", null, React.createElement("p",{className:"text-white font-semibold"},"Rechtsform-Quiz starten"), React.createElement("p",{className:"text-xs text-white/40 mt-0.5"},"8 Fragen · Einzelunternehmen, GbR, UG oder GmbH"))),
+        React.createElement(ArrowRight, { size:18, className:"text-white/30" }))),
+
+    suggestedForm && !selectedForm && React.createElement("div", { className:"rounded-xl p-4 flex items-start gap-3", style:{background:"rgba(139,92,246,0.06)",border:"1px solid rgba(139,92,246,0.15)"} },
+      React.createElement(Sparkles, { size:14, className:"text-violet-400 mt-0.5 flex-shrink-0" }),
+      React.createElement("p", { className:"text-sm text-violet-300/80" }, "Basierend auf deinem Profil empfehlen wir: ", React.createElement("strong",{className:"text-violet-300"},GEWERBE_CHECKLISTS[suggestedForm]?.label), ". ",
+        React.createElement("button", { onClick:function(){setSelectedForm(suggestedForm)}, className:"underline underline-offset-2 hover:text-violet-200 transition-colors" }, "Checkliste öffnen"))),
+
+    React.createElement("div", null,
+      React.createElement("h2", { className:"text-xl font-bold text-white mb-4" }, "Checkliste wählen"),
+      React.createElement("div", { className:"flex flex-wrap gap-2 mb-6" }, Object.keys(GEWERBE_CHECKLISTS).map(function(key) {
+        var cl = GEWERBE_CHECKLISTS[key];
+        var done = cl.steps.filter(function(s){return completedSteps[s.id]}).length;
+        var isSel = selectedForm === key;
+        return React.createElement("button", { key:key, onClick:function(){setSelectedForm(isSel?null:key)}, className:"px-4 py-2.5 rounded-xl text-sm font-medium transition-all border", style:{
+          borderColor:isSel?"rgba(139,92,246,0.8)":"rgba(255,255,255,0.12)",
+          background:isSel?"rgba(139,92,246,0.15)":"rgba(255,255,255,0.03)",
+          color:isSel?"#a78bfa":"rgba(255,255,255,0.6)"
+        }}, cl.label, " ", React.createElement("span",{className:"text-xs opacity-60"},done+"/"+cl.steps.length));
+      })),
+      selectedForm ? renderChecklist(selectedForm) :
+        React.createElement("div", { className:"text-center py-12" },
+          React.createElement(Building, { size:40, className:"mx-auto mb-4 text-white/20" }),
+          React.createElement("p", { className:"text-white/40 text-sm" }, "Wähle oben eine Rechtsform, um die Checkliste zu sehen."))));
+};
+
+
+// ═══════════════════════════════════════════════════════════════
+// BUSINESSPLAN PAGE
+// ═══════════════════════════════════════════════════════════════
+
+const BP_QUESTIONS = [
+  {id:"firma",label:"Wie heißt dein Unternehmen?",type:"text",placeholder:"z.B. TechVision GmbH"},
+  {id:"idee",label:"Was ist deine Geschäftsidee? Beschreibe in 2-3 Sätzen was du anbietest.",type:"textarea",placeholder:"Wir entwickeln eine App die..."},
+  {id:"problem",label:"Welches Problem löst du für deine Kunden?",type:"textarea",placeholder:"Viele Gründer haben das Problem dass..."},
+  {id:"zielgruppe",label:"Wer ist deine Zielgruppe? Beschreibe deinen idealen Kunden.",type:"textarea",placeholder:"Unsere Zielgruppe sind..."},
+  {id:"wettbewerb",label:"Wer sind deine Hauptwettbewerber und was machst du anders/besser?",type:"textarea",placeholder:"Die wichtigsten Wettbewerber sind..."},
+  {id:"geschaeftsmodell",label:"Wie verdienst du Geld? Beschreibe dein Geschäftsmodell und deine Preise.",type:"textarea",placeholder:"Wir verdienen Geld durch..."},
+  {id:"marketing",label:"Welche Marketingkanäle planst du zu nutzen?",type:"multi",options:["Social Media","Google Ads","Content Marketing","Kaltakquise","Messen/Events","Empfehlungen","PR","Andere"]},
+  {id:"meilensteine",label:"Was sind deine wichtigsten Meilensteine für die nächsten 12 Monate?",type:"textarea",placeholder:"Monat 1-3: MVP fertigstellen..."},
+  {id:"kosten",label:"Wie hoch sind deine geschätzten monatlichen Kosten?",type:"costs"},
+  {id:"umsatz",label:"Wie hoch ist dein erwarteter monatlicher Umsatz?",type:"revenue"}
+];
+
+const BusinessplanPage = () => {
+  const { user } = useAuth();
+  var stepState = useState(1); var step = stepState[0]; var setStep = stepState[1];
+  var viewState = useState("questions"); var view = viewState[0]; var setView = viewState[1];
+  var dataState = useState({firma:"",idee:"",problem:"",zielgruppe:"",wettbewerb:"",geschaeftsmodell:"",marketing:[],meilensteine:"",kosten_miete:0,kosten_personal:0,kosten_marketing:0,kosten_software:0,kosten_sonstiges:0,umsatz_6:0,umsatz_12:0}); var data = dataState[0]; var setData = dataState[1];
+  var savingState = useState(false); var saving = savingState[0]; var setSaving = savingState[1];
+  var TOTAL = BP_QUESTIONS.length;
+  var q = BP_QUESTIONS[step-1];
+
+  var update = function(key, val) { setData(function(p) { return Object.assign({}, p, {[key]:val}); }); };
+
+  var toggleMarketing = function(ch) {
+    setData(function(p) {
+      var arr = p.marketing.slice();
+      var idx = arr.indexOf(ch);
+      if (idx >= 0) arr.splice(idx, 1); else arr.push(ch);
+      return Object.assign({}, p, {marketing:arr});
+    });
+  };
+
+  var totalKosten = (Number(data.kosten_miete)||0)+(Number(data.kosten_personal)||0)+(Number(data.kosten_marketing)||0)+(Number(data.kosten_software)||0)+(Number(data.kosten_sonstiges)||0);
+
+  var canNext = function() {
+    if (q.type==="text") return data[q.id] && data[q.id].length > 1;
+    if (q.type==="textarea") return data[q.id] && data[q.id].length > 5;
+    if (q.type==="multi") return data.marketing.length > 0;
+    return true;
+  };
+
+  var saveToSupabase = async function() {
+    if (!user) return;
+    setSaving(true);
+    var bpData = JSON.stringify(data);
+    var { error } = await supabase.from("profiles").update({businessplan_data:bpData}).eq("id",user.id);
+    if (error) console.error("saveBusinessplan error:", error);
+    setSaving(false);
+  };
+
+  var handleGenerate = async function() {
+    await saveToSupabase();
+    setView("result");
+  };
+
+  var handlePrint = function() {
+    var printWin = window.open("","_blank");
+    var kostenTotal = totalKosten;
+    var html = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Businessplan - '+data.firma+'</title><style>body{font-family:Arial,sans-serif;max-width:800px;margin:0 auto;padding:40px;color:#222;line-height:1.6}h1{color:#5b21b6;border-bottom:2px solid #8b5cf6;padding-bottom:10px}h2{color:#6d28d9;margin-top:30px}table{width:100%;border-collapse:collapse;margin:10px 0}td,th{padding:8px 12px;border:1px solid #ddd;text-align:left}th{background:#f3f0ff}p{margin:8px 0}.header{text-align:center;margin-bottom:40px}.footer{margin-top:40px;padding-top:20px;border-top:1px solid #ddd;text-align:center;color:#888;font-size:12px}</style></head><body>';
+    html += '<div class="header"><h1>Businessplan: '+data.firma+'</h1><p>Erstellt am '+ new Date().toLocaleDateString("de-DE")+'</p></div>';
+    html += '<h2>1. Executive Summary</h2><p>'+data.firma+' löst das Problem: '+data.problem+'. Die Geschäftsidee: '+data.idee+'. Die Zielgruppe sind '+data.zielgruppe+'. Das Unternehmen plant einen monatlichen Umsatz von '+Number(data.umsatz_12).toLocaleString("de-DE")+' € nach 12 Monaten bei monatlichen Kosten von '+kostenTotal.toLocaleString("de-DE")+' €.</p>';
+    html += '<h2>2. Geschäftsidee & Wertversprechen</h2><p>'+data.idee+'</p>';
+    html += '<h2>3. Marktanalyse & Zielgruppe</h2><p><strong>Problem:</strong> '+data.problem+'</p><p><strong>Zielgruppe:</strong> '+data.zielgruppe+'</p>';
+    html += '<h2>4. Wettbewerbsanalyse</h2><p>'+data.wettbewerb+'</p>';
+    html += '<h2>5. Geschäftsmodell & Preisstrategie</h2><p>'+data.geschaeftsmodell+'</p>';
+    html += '<h2>6. Marketing & Vertrieb</h2><p>Geplante Kanäle: '+data.marketing.join(", ")+'</p>';
+    html += '<h2>7. Meilensteine & Zeitplan</h2><p>'+data.meilensteine.replace(/\n/g,"<br>")+'</p>';
+    html += '<h2>8. Finanzplanung</h2>';
+    html += '<table><tr><th>Kostenart</th><th>Monatlich</th><th>Jährlich</th></tr>';
+    html += '<tr><td>Miete</td><td>'+Number(data.kosten_miete).toLocaleString("de-DE")+' €</td><td>'+(Number(data.kosten_miete)*12).toLocaleString("de-DE")+' €</td></tr>';
+    html += '<tr><td>Personal</td><td>'+Number(data.kosten_personal).toLocaleString("de-DE")+' €</td><td>'+(Number(data.kosten_personal)*12).toLocaleString("de-DE")+' €</td></tr>';
+    html += '<tr><td>Marketing</td><td>'+Number(data.kosten_marketing).toLocaleString("de-DE")+' €</td><td>'+(Number(data.kosten_marketing)*12).toLocaleString("de-DE")+' €</td></tr>';
+    html += '<tr><td>Software/Tools</td><td>'+Number(data.kosten_software).toLocaleString("de-DE")+' €</td><td>'+(Number(data.kosten_software)*12).toLocaleString("de-DE")+' €</td></tr>';
+    html += '<tr><td>Sonstiges</td><td>'+Number(data.kosten_sonstiges).toLocaleString("de-DE")+' €</td><td>'+(Number(data.kosten_sonstiges)*12).toLocaleString("de-DE")+' €</td></tr>';
+    html += '<tr style="font-weight:bold;background:#f3f0ff"><td>Gesamt</td><td>'+kostenTotal.toLocaleString("de-DE")+' €</td><td>'+(kostenTotal*12).toLocaleString("de-DE")+' €</td></tr></table>';
+    html += '<h3>Umsatzprognose</h3><table><tr><th></th><th>Monatlich</th><th>Jährlich (hochgerechnet)</th></tr>';
+    html += '<tr><td>Nach 6 Monaten</td><td>'+Number(data.umsatz_6).toLocaleString("de-DE")+' €</td><td>'+(Number(data.umsatz_6)*12).toLocaleString("de-DE")+' €</td></tr>';
+    html += '<tr><td>Nach 12 Monaten</td><td>'+Number(data.umsatz_12).toLocaleString("de-DE")+' €</td><td>'+(Number(data.umsatz_12)*12).toLocaleString("de-DE")+' €</td></tr></table>';
+    html += '<div class="footer">Erstellt mit CoFounder AI · '+new Date().toLocaleDateString("de-DE")+'</div></body></html>';
+    printWin.document.write(html);
+    printWin.document.close();
+    printWin.print();
+  };
+
+  useEffect(function() {
+    if (!user) return;
+    supabase.from("profiles").select("businessplan_data").eq("id",user.id).single().then(function(res) {
+      if (res.data && res.data.businessplan_data) {
+        try { var saved = JSON.parse(res.data.businessplan_data); setData(function(p){return Object.assign({},p,saved)}); } catch(e){}
+      }
+    });
+  }, [user]);
+
+  var inputStyle = { background:"rgba(255,255,255,0.05)", border:"1px solid rgba(255,255,255,0.1)" };
+  var focusIn = function(e) { e.target.style.borderColor="rgba(139,92,246,0.5)"; };
+  var focusOut = function(e) { e.target.style.borderColor="rgba(255,255,255,0.1)"; };
+
+  if (view === "result") {
+    var sections = [
+      {title:"1. Executive Summary",content:data.firma+" löst folgendes Problem: "+data.problem+" Die Geschäftsidee: "+data.idee+" Zielgruppe: "+data.zielgruppe+" Das Unternehmen plant einen monatlichen Umsatz von "+Number(data.umsatz_12).toLocaleString("de-DE")+" € nach 12 Monaten."},
+      {title:"2. Geschäftsidee & Wertversprechen",content:data.idee},
+      {title:"3. Marktanalyse & Zielgruppe",content:"Problem: "+data.problem+"\n\nZielgruppe: "+data.zielgruppe},
+      {title:"4. Wettbewerbsanalyse",content:data.wettbewerb},
+      {title:"5. Geschäftsmodell & Preisstrategie",content:data.geschaeftsmodell},
+      {title:"6. Marketing & Vertrieb",content:"Geplante Kanäle: "+data.marketing.join(", ")},
+      {title:"7. Meilensteine & Zeitplan",content:data.meilensteine}
+    ];
+    return React.createElement("div", { className:"max-w-4xl mx-auto py-10 px-6" },
+      React.createElement("div", { className:"flex items-center justify-between mb-8 flex-wrap gap-4" },
+        React.createElement("div", null,
+          React.createElement("h1", { className:"text-3xl font-bold text-white" }, "Businessplan: "+data.firma),
+          React.createElement("p", { className:"text-white/45 text-sm mt-1" }, "Erstellt am "+new Date().toLocaleDateString("de-DE"))),
+        React.createElement("div", { className:"flex gap-3" },
+          React.createElement(SecondaryButton, { onClick:function(){setView("questions")} }, React.createElement(ChevronLeft,{size:14}), " Bearbeiten"),
+          React.createElement(PrimaryButton, { onClick:handlePrint }, React.createElement(FileText,{size:14}), " Als PDF drucken"))),
+      React.createElement("div", { className:"space-y-5" },
+        sections.map(function(s,i) {
+          return React.createElement(GlassCard, { key:i, className:"p-6" },
+            React.createElement("h2", { className:"text-lg font-bold text-violet-300 mb-3" }, s.title),
+            React.createElement("p", { className:"text-sm text-white/70 leading-relaxed whitespace-pre-line" }, s.content));
+        }),
+        React.createElement(GlassCard, { className:"p-6" },
+          React.createElement("h2", { className:"text-lg font-bold text-violet-300 mb-4" }, "8. Finanzplanung"),
+          React.createElement("div", { className:"overflow-x-auto" },
+            React.createElement("table", { className:"w-full text-sm" },
+              React.createElement("thead", null,
+                React.createElement("tr", { className:"border-b border-white/10" },
+                  React.createElement("th", { className:"text-left py-2 text-white/50 font-medium" }, "Kostenart"),
+                  React.createElement("th", { className:"text-right py-2 text-white/50 font-medium" }, "Monatlich"),
+                  React.createElement("th", { className:"text-right py-2 text-white/50 font-medium" }, "Jährlich"))),
+              React.createElement("tbody", null,
+                [{l:"Miete",v:data.kosten_miete},{l:"Personal",v:data.kosten_personal},{l:"Marketing",v:data.kosten_marketing},{l:"Software/Tools",v:data.kosten_software},{l:"Sonstiges",v:data.kosten_sonstiges}].map(function(r) {
+                  return React.createElement("tr", { key:r.l, className:"border-b border-white/5" },
+                    React.createElement("td", { className:"py-2 text-white/70" }, r.l),
+                    React.createElement("td", { className:"py-2 text-right text-white/70" }, Number(r.v).toLocaleString("de-DE")+" €"),
+                    React.createElement("td", { className:"py-2 text-right text-white/70" }, (Number(r.v)*12).toLocaleString("de-DE")+" €"));
+                }),
+                React.createElement("tr", { className:"border-t-2 border-violet-400/30 font-bold" },
+                  React.createElement("td", { className:"py-2 text-white" }, "Gesamt"),
+                  React.createElement("td", { className:"py-2 text-right text-white" }, totalKosten.toLocaleString("de-DE")+" €"),
+                  React.createElement("td", { className:"py-2 text-right text-white" }, (totalKosten*12).toLocaleString("de-DE")+" €"))))),
+          React.createElement("h3", { className:"text-sm font-semibold text-white/60 mt-6 mb-3" }, "Umsatzprognose"),
+          React.createElement("div", { className:"grid grid-cols-2 gap-4" },
+            React.createElement("div", { className:"p-4 rounded-xl", style:{background:"rgba(139,92,246,0.08)",border:"1px solid rgba(139,92,246,0.15)"} },
+              React.createElement("p", { className:"text-xs text-white/40 mb-1" }, "Nach 6 Monaten"),
+              React.createElement("p", { className:"text-xl font-bold text-white" }, Number(data.umsatz_6).toLocaleString("de-DE")+" €/Monat")),
+            React.createElement("div", { className:"p-4 rounded-xl", style:{background:"rgba(16,185,129,0.08)",border:"1px solid rgba(16,185,129,0.15)"} },
+              React.createElement("p", { className:"text-xs text-white/40 mb-1" }, "Nach 12 Monaten"),
+              React.createElement("p", { className:"text-xl font-bold text-white" }, Number(data.umsatz_12).toLocaleString("de-DE")+" €/Monat"))))));
+  }
+
+  return React.createElement("div", { className:"max-w-2xl mx-auto py-10 px-6" },
+    React.createElement("div", { className:"mb-8" },
+      React.createElement("h1", { className:"text-3xl font-bold text-white mb-2" }, "Businessplan erstellen"),
+      React.createElement("p", { className:"text-white/45 text-sm mb-6" }, "Beantworte 10 Fragen und erhalte deinen strukturierten Businessplan"),
+      React.createElement(ProgressBar, { current:step, total:TOTAL })),
+
+    React.createElement(GlassCard, { className:"p-6" },
+      React.createElement("p", { className:"text-white font-semibold text-lg mb-5" }, q.label),
+
+      q.type === "text" && React.createElement("input", { value:data[q.id]||"", onChange:function(e){update(q.id,e.target.value)}, placeholder:q.placeholder, className:"w-full rounded-xl p-3 text-sm text-white placeholder-white/25 outline-none transition-all duration-200", style:inputStyle, onFocus:focusIn, onBlur:focusOut }),
+
+      q.type === "textarea" && React.createElement("textarea", { rows:4, value:data[q.id]||"", onChange:function(e){update(q.id,e.target.value)}, placeholder:q.placeholder, className:"w-full rounded-xl p-3 text-sm text-white placeholder-white/25 outline-none resize-none transition-all duration-200", style:inputStyle, onFocus:focusIn, onBlur:focusOut }),
+
+      q.type === "multi" && React.createElement("div", { className:"flex flex-wrap gap-3" }, q.options.map(function(opt) {
+        var sel = data.marketing.indexOf(opt) >= 0;
+        return React.createElement("button", { key:opt, onClick:function(){toggleMarketing(opt)}, className:"px-4 py-2 rounded-xl text-sm font-medium transition-all duration-200 border", style:{
+          borderColor:sel?"rgba(139,92,246,0.8)":"rgba(255,255,255,0.12)",
+          background:sel?"rgba(139,92,246,0.15)":"rgba(255,255,255,0.03)",
+          color:sel?"#a78bfa":"rgba(255,255,255,0.6)"
+        }}, opt);
+      })),
+
+      q.type === "costs" && React.createElement("div", { className:"space-y-4" },
+        [{key:"kosten_miete",label:"Miete / Büro"},{key:"kosten_personal",label:"Personal"},{key:"kosten_marketing",label:"Marketing"},{key:"kosten_software",label:"Software / Tools"},{key:"kosten_sonstiges",label:"Sonstiges"}].map(function(f) {
+          return React.createElement("div", { key:f.key, className:"flex items-center gap-3" },
+            React.createElement("label", { className:"text-sm text-white/60 w-36 flex-shrink-0" }, f.label),
+            React.createElement("div", { className:"relative flex-1" },
+              React.createElement("input", { type:"number", min:0, step:50, value:data[f.key]||"", onChange:function(e){update(f.key,e.target.value)}, placeholder:"0", className:"w-full rounded-xl p-3 pr-8 text-sm text-white placeholder-white/25 outline-none transition-all duration-200", style:inputStyle, onFocus:focusIn, onBlur:focusOut }),
+              React.createElement("span", { className:"absolute right-3 top-1/2 -translate-y-1/2 text-white/30 text-sm" }, "€")));
+        }),
+        React.createElement("div", { className:"flex items-center justify-between pt-3 border-t border-white/10" },
+          React.createElement("span", { className:"text-sm font-medium text-white/70" }, "Summe monatlich:"),
+          React.createElement("span", { className:"text-lg font-bold text-violet-300" }, totalKosten.toLocaleString("de-DE")+" €"))),
+
+      q.type === "revenue" && React.createElement("div", { className:"space-y-4" },
+        React.createElement("div", null,
+          React.createElement("label", { className:"text-sm text-white/60 mb-2 block" }, "Erwarteter Umsatz nach 6 Monaten (monatlich)"),
+          React.createElement("div", { className:"relative" },
+            React.createElement("input", { type:"number", min:0, step:100, value:data.umsatz_6||"", onChange:function(e){update("umsatz_6",e.target.value)}, placeholder:"0", className:"w-full rounded-xl p-3 pr-8 text-sm text-white placeholder-white/25 outline-none transition-all duration-200", style:inputStyle, onFocus:focusIn, onBlur:focusOut }),
+            React.createElement("span", { className:"absolute right-3 top-1/2 -translate-y-1/2 text-white/30 text-sm" }, "€"))),
+        React.createElement("div", null,
+          React.createElement("label", { className:"text-sm text-white/60 mb-2 block" }, "Erwarteter Umsatz nach 12 Monaten (monatlich)"),
+          React.createElement("div", { className:"relative" },
+            React.createElement("input", { type:"number", min:0, step:100, value:data.umsatz_12||"", onChange:function(e){update("umsatz_12",e.target.value)}, placeholder:"0", className:"w-full rounded-xl p-3 pr-8 text-sm text-white placeholder-white/25 outline-none transition-all duration-200", style:inputStyle, onFocus:focusIn, onBlur:focusOut }),
+            React.createElement("span", { className:"absolute right-3 top-1/2 -translate-y-1/2 text-white/30 text-sm" }, "€"))))),
+
+    React.createElement("div", { className:"flex items-center justify-between mt-6" },
+      React.createElement("button", { onClick:function(){if(step>1)setStep(function(s){return s-1})}, disabled:step===1, className:"flex items-center gap-2 text-sm text-white/40 hover:text-white/70 transition-colors disabled:opacity-20" }, React.createElement(ChevronLeft,{size:16}), " Zurück"),
+      step < TOTAL ?
+        React.createElement(PrimaryButton, { onClick:function(){setStep(function(s){return s+1})}, disabled:!canNext() }, "Weiter ", React.createElement(ChevronRight,{size:16})) :
+        React.createElement(PrimaryButton, { onClick:handleGenerate, loading:saving }, "Businessplan generieren ", React.createElement(Sparkles,{size:16}))));
+};
+
+
+// ═══════════════════════════════════════════════════════════════
+// DOKUMENTE PAGE (with Supabase upload)
+// ═══════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════
+// BUSINESSPLAN INLINE (embedded in DokumentePage)
+// ═══════════════════════════════════════════════════════════════
+const BusinessplanInline = ({ onClose }) => {
+  const { user } = useAuth();
+  var stepState = useState(1); var step = stepState[0]; var setStep = stepState[1];
+  var viewState = useState("questions"); var view = viewState[0]; var setView = viewState[1];
+  var dataState = useState({firma:"",idee:"",problem:"",zielgruppe:"",wettbewerb:"",geschaeftsmodell:"",marketing:[],meilensteine:"",kosten_miete:0,kosten_personal:0,kosten_marketing:0,kosten_software:0,kosten_sonstiges:0,umsatz_6:0,umsatz_12:0}); var data = dataState[0]; var setData = dataState[1];
+  var savingState = useState(false); var saving = savingState[0]; var setSaving = savingState[1];
+  var TOTAL = BP_QUESTIONS.length;
+  var q = BP_QUESTIONS[step-1];
+
+  var update = function(key, val) { setData(function(p) { return Object.assign({}, p, {[key]:val}); }); };
+
+  var toggleMarketing = function(ch) {
+    setData(function(p) {
+      var arr = p.marketing.slice();
+      var idx = arr.indexOf(ch);
+      if (idx >= 0) arr.splice(idx, 1); else arr.push(ch);
+      return Object.assign({}, p, {marketing:arr});
+    });
+  };
+
+  var totalKosten = (Number(data.kosten_miete)||0)+(Number(data.kosten_personal)||0)+(Number(data.kosten_marketing)||0)+(Number(data.kosten_software)||0)+(Number(data.kosten_sonstiges)||0);
+
+  var canNext = function() {
+    if (q.type==="text") return data[q.id] && data[q.id].length > 1;
+    if (q.type==="textarea") return data[q.id] && data[q.id].length > 5;
+    if (q.type==="multi") return data.marketing.length > 0;
+    return true;
+  };
+
+  var saveToSupabase = async function() {
+    if (!user) return;
+    setSaving(true);
+    var bpData = JSON.stringify(data);
+    var { error } = await supabase.from("profiles").update({businessplan_data:bpData}).eq("id",user.id);
+    if (error) console.error("saveBusinessplan error:", error);
+    setSaving(false);
+  };
+
+  var handleGenerate = async function() {
+    await saveToSupabase();
+    setView("result");
+  };
+
+  var handlePrint = function() {
+    var printWin = window.open("","_blank");
+    var kostenTotal = totalKosten;
+    var html = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Businessplan - '+data.firma+'</title><style>body{font-family:Arial,sans-serif;max-width:800px;margin:0 auto;padding:40px;color:#222;line-height:1.6}h1{color:#5b21b6;border-bottom:2px solid #8b5cf6;padding-bottom:10px}h2{color:#6d28d9;margin-top:30px}table{width:100%;border-collapse:collapse;margin:10px 0}td,th{padding:8px 12px;border:1px solid #ddd;text-align:left}th{background:#f3f0ff}p{margin:8px 0}.header{text-align:center;margin-bottom:40px}.footer{margin-top:40px;padding-top:20px;border-top:1px solid #ddd;text-align:center;color:#888;font-size:12px}</style></head><body>';
+    html += '<div class="header"><h1>Businessplan: '+data.firma+'</h1><p>Erstellt am '+ new Date().toLocaleDateString("de-DE")+'</p></div>';
+    html += '<h2>1. Executive Summary</h2><p>'+data.firma+' löst das Problem: '+data.problem+'. Die Geschäftsidee: '+data.idee+'. Die Zielgruppe sind '+data.zielgruppe+'. Das Unternehmen plant einen monatlichen Umsatz von '+Number(data.umsatz_12).toLocaleString("de-DE")+' € nach 12 Monaten bei monatlichen Kosten von '+kostenTotal.toLocaleString("de-DE")+' €.</p>';
+    html += '<h2>2. Geschäftsidee & Wertversprechen</h2><p>'+data.idee+'</p>';
+    html += '<h2>3. Marktanalyse & Zielgruppe</h2><p>'+data.zielgruppe+'</p>';
+    html += '<h2>4. Wettbewerbsanalyse</h2><p>'+data.wettbewerb+'</p>';
+    html += '<h2>5. Geschäftsmodell & Preisstrategie</h2><p>'+data.geschaeftsmodell+'</p>';
+    html += '<h2>6. Marketing & Vertrieb</h2><p>Geplante Kanäle: '+data.marketing.join(", ")+'</p>';
+    html += '<h2>7. Meilensteine & Zeitplan</h2><p>'+data.meilensteine+'</p>';
+    html += '<h2>8. Finanzplanung</h2>';
+    html += '<table><tr><th>Position</th><th>Monatlich</th><th>Jährlich</th></tr>';
+    html += '<tr><td>Miete</td><td>'+Number(data.kosten_miete).toLocaleString("de-DE")+' €</td><td>'+(Number(data.kosten_miete)*12).toLocaleString("de-DE")+' €</td></tr>';
+    html += '<tr><td>Personal</td><td>'+Number(data.kosten_personal).toLocaleString("de-DE")+' €</td><td>'+(Number(data.kosten_personal)*12).toLocaleString("de-DE")+' €</td></tr>';
+    html += '<tr><td>Marketing</td><td>'+Number(data.kosten_marketing).toLocaleString("de-DE")+' €</td><td>'+(Number(data.kosten_marketing)*12).toLocaleString("de-DE")+' €</td></tr>';
+    html += '<tr><td>Software/Tools</td><td>'+Number(data.kosten_software).toLocaleString("de-DE")+' €</td><td>'+(Number(data.kosten_software)*12).toLocaleString("de-DE")+' €</td></tr>';
+    html += '<tr><td>Sonstiges</td><td>'+Number(data.kosten_sonstiges).toLocaleString("de-DE")+' €</td><td>'+(Number(data.kosten_sonstiges)*12).toLocaleString("de-DE")+' €</td></tr>';
+    html += '<tr style="font-weight:bold;background:#f3f0ff"><td>Gesamt</td><td>'+kostenTotal.toLocaleString("de-DE")+' €</td><td>'+(kostenTotal*12).toLocaleString("de-DE")+' €</td></tr></table>';
+    html += '<h3>Umsatzprognose</h3><table><tr><th></th><th>Nach 6 Monaten</th><th>Nach 12 Monaten</th></tr>';
+    html += '<tr><td>Umsatz/Monat</td><td>'+Number(data.umsatz_6).toLocaleString("de-DE")+' €</td><td>'+Number(data.umsatz_12).toLocaleString("de-DE")+' €</td></tr></table>';
+    html += '<div class="footer">Erstellt mit CoFounder AI · '+new Date().toLocaleDateString("de-DE")+'</div></body></html>';
+    printWin.document.write(html);
+    printWin.document.close();
+    printWin.print();
+  };
+
+  var inputStyle = { background:"rgba(255,255,255,0.05)", border:"1px solid rgba(255,255,255,0.1)" };
+  var focusIn = function(e) { e.target.style.borderColor = "rgba(139,92,246,0.5)"; };
+  var focusOut = function(e) { e.target.style.borderColor = "rgba(255,255,255,0.1)"; };
+  var MARKETING_CHANNELS = ["Social Media","Google Ads","Content Marketing","Kaltakquise","Messen/Events","Empfehlungen","PR","Andere"];
+
+  if (view === "result") {
+    return React.createElement("div", { className:"space-y-4" },
+      React.createElement("div", { className:"flex items-center justify-between mb-2" },
+        React.createElement("h3", { className:"text-xl font-bold text-white" }, "Businessplan: " + data.firma),
+        React.createElement("div", { className:"flex gap-2" },
+          React.createElement(PrimaryButton, { onClick:handlePrint, className:"text-xs py-2 px-4" }, React.createElement(Download,{size:14}), " Als PDF"),
+          React.createElement(SecondaryButton, { onClick:function(){setView("questions")}, className:"text-xs py-2 px-4" }, "Bearbeiten"))),
+
+      React.createElement(GlassCard, { className:"p-5" },
+        React.createElement("h4", { className:"text-violet-400 text-xs uppercase tracking-wider mb-2" }, "1. Executive Summary"),
+        React.createElement("p", { className:"text-sm text-white/70 leading-relaxed" }, data.firma+" löst das Problem: "+data.problem+". Die Geschäftsidee: "+data.idee+". Zielgruppe: "+data.zielgruppe+". Geplanter Umsatz nach 12 Monaten: "+Number(data.umsatz_12).toLocaleString("de-DE")+" €/Monat bei "+totalKosten.toLocaleString("de-DE")+" € monatlichen Kosten.")),
+      React.createElement(GlassCard, { className:"p-5" },
+        React.createElement("h4", { className:"text-violet-400 text-xs uppercase tracking-wider mb-2" }, "2. Geschäftsidee & Wertversprechen"),
+        React.createElement("p", { className:"text-sm text-white/70 leading-relaxed" }, data.idee)),
+      React.createElement(GlassCard, { className:"p-5" },
+        React.createElement("h4", { className:"text-violet-400 text-xs uppercase tracking-wider mb-2" }, "3. Marktanalyse & Zielgruppe"),
+        React.createElement("p", { className:"text-sm text-white/70 leading-relaxed" }, data.zielgruppe)),
+      React.createElement(GlassCard, { className:"p-5" },
+        React.createElement("h4", { className:"text-violet-400 text-xs uppercase tracking-wider mb-2" }, "4. Wettbewerbsanalyse"),
+        React.createElement("p", { className:"text-sm text-white/70 leading-relaxed" }, data.wettbewerb)),
+      React.createElement(GlassCard, { className:"p-5" },
+        React.createElement("h4", { className:"text-violet-400 text-xs uppercase tracking-wider mb-2" }, "5. Geschäftsmodell & Preisstrategie"),
+        React.createElement("p", { className:"text-sm text-white/70 leading-relaxed" }, data.geschaeftsmodell)),
+      React.createElement(GlassCard, { className:"p-5" },
+        React.createElement("h4", { className:"text-violet-400 text-xs uppercase tracking-wider mb-2" }, "6. Marketing & Vertrieb"),
+        React.createElement("div", { className:"flex flex-wrap gap-2" }, data.marketing.map(function(ch) {
+          return React.createElement("span", { key:ch, className:"text-xs px-3 py-1 rounded-full bg-violet-500/10 text-violet-300 border border-violet-400/20" }, ch);
+        }))),
+      React.createElement(GlassCard, { className:"p-5" },
+        React.createElement("h4", { className:"text-violet-400 text-xs uppercase tracking-wider mb-2" }, "7. Meilensteine & Zeitplan"),
+        React.createElement("p", { className:"text-sm text-white/70 leading-relaxed whitespace-pre-line" }, data.meilensteine)),
+      React.createElement(GlassCard, { className:"p-5" },
+        React.createElement("h4", { className:"text-violet-400 text-xs uppercase tracking-wider mb-2" }, "8. Finanzplanung"),
+        React.createElement("div", { className:"overflow-x-auto" },
+          React.createElement("table", { className:"w-full text-sm" },
+            React.createElement("thead", null, React.createElement("tr", { className:"border-b border-white/10" },
+              React.createElement("th", { className:"text-left text-white/50 py-2 font-medium" }, "Position"),
+              React.createElement("th", { className:"text-right text-white/50 py-2 font-medium" }, "Monatlich"),
+              React.createElement("th", { className:"text-right text-white/50 py-2 font-medium" }, "Jährlich"))),
+            React.createElement("tbody", null,
+              [["Miete","kosten_miete"],["Personal","kosten_personal"],["Marketing","kosten_marketing"],["Software/Tools","kosten_software"],["Sonstiges","kosten_sonstiges"]].map(function(r) {
+                return React.createElement("tr", { key:r[1], className:"border-b border-white/5" },
+                  React.createElement("td", { className:"py-2 text-white/70" }, r[0]),
+                  React.createElement("td", { className:"py-2 text-right text-white/70" }, Number(data[r[1]]).toLocaleString("de-DE")+" €"),
+                  React.createElement("td", { className:"py-2 text-right text-white/70" }, (Number(data[r[1]])*12).toLocaleString("de-DE")+" €"));
+              }),
+              React.createElement("tr", { className:"border-t border-violet-400/30 font-semibold" },
+                React.createElement("td", { className:"py-2 text-white" }, "Gesamt"),
+                React.createElement("td", { className:"py-2 text-right text-white" }, totalKosten.toLocaleString("de-DE")+" €"),
+                React.createElement("td", { className:"py-2 text-right text-white" }, (totalKosten*12).toLocaleString("de-DE")+" €"))))),
+        React.createElement("div", { className:"mt-4 pt-4 border-t border-white/10" },
+          React.createElement("p", { className:"text-xs text-white/40 mb-2" }, "Umsatzprognose"),
+          React.createElement("div", { className:"grid grid-cols-2 gap-4" },
+            React.createElement("div", { className:"p-3 rounded-xl bg-white/5" },
+              React.createElement("p", { className:"text-xs text-white/40" }, "Nach 6 Monaten"),
+              React.createElement("p", { className:"text-lg font-bold text-white" }, Number(data.umsatz_6).toLocaleString("de-DE")+" €/Monat")),
+            React.createElement("div", { className:"p-3 rounded-xl bg-white/5" },
+              React.createElement("p", { className:"text-xs text-white/40" }, "Nach 12 Monaten"),
+              React.createElement("p", { className:"text-lg font-bold text-white" }, Number(data.umsatz_12).toLocaleString("de-DE")+" €/Monat"))))));
+  }
+
+  // Questions view
+  return React.createElement("div", { className:"space-y-5" },
+    React.createElement(ProgressBar, { current:step, total:TOTAL }),
+    React.createElement("p", { className:"text-white font-semibold mt-4" }, q.label),
+
+    q.type === "text" && React.createElement("input", { value:data[q.id]||"", onChange:function(e){update(q.id,e.target.value)}, placeholder:q.placeholder, className:"w-full rounded-xl p-3 text-sm text-white placeholder-white/25 outline-none transition-all duration-200", style:inputStyle, onFocus:focusIn, onBlur:focusOut }),
+
+    q.type === "textarea" && React.createElement("textarea", { rows:4, value:data[q.id]||"", onChange:function(e){update(q.id,e.target.value)}, placeholder:q.placeholder, className:"w-full rounded-xl p-3 text-sm text-white placeholder-white/25 outline-none resize-none transition-all duration-200", style:inputStyle, onFocus:focusIn, onBlur:focusOut }),
+
+    q.type === "multi" && React.createElement("div", { className:"flex flex-wrap gap-2" }, MARKETING_CHANNELS.map(function(ch) {
+      var sel = data.marketing.indexOf(ch) >= 0;
+      return React.createElement("button", { key:ch, onClick:function(){toggleMarketing(ch)}, className:"px-4 py-2 rounded-xl text-sm font-medium transition-all duration-200 border", style:{borderColor:sel?"rgba(139,92,246,0.8)":"rgba(255,255,255,0.12)",background:sel?"rgba(139,92,246,0.15)":"rgba(255,255,255,0.03)",color:sel?"#a78bfa":"rgba(255,255,255,0.6)"} }, ch);
+    })),
+
+    q.type === "costs" && React.createElement("div", { className:"space-y-3" },
+      [["kosten_miete","Miete/Büro"],["kosten_personal","Personal"],["kosten_marketing","Marketing"],["kosten_software","Software/Tools"],["kosten_sonstiges","Sonstiges"]].map(function(item) {
+        return React.createElement("div", { key:item[0], className:"flex items-center gap-3" },
+          React.createElement("span", { className:"text-sm text-white/60 w-32 flex-shrink-0" }, item[1]),
+          React.createElement("input", { type:"number", value:data[item[0]]||"", onChange:function(e){update(item[0],e.target.value)}, placeholder:"0", className:"flex-1 rounded-xl p-2.5 text-sm text-white placeholder-white/25 outline-none transition-all duration-200 text-right", style:inputStyle, onFocus:focusIn, onBlur:focusOut }),
+          React.createElement("span", { className:"text-sm text-white/40" }, "€"));
+      }),
+      React.createElement("div", { className:"flex items-center justify-between pt-3 border-t border-white/10" },
+        React.createElement("span", { className:"text-sm font-semibold text-white" }, "Gesamt"),
+        React.createElement("span", { className:"text-lg font-bold text-violet-400" }, totalKosten.toLocaleString("de-DE")+" €/Monat"))),
+
+    q.type === "revenue" && React.createElement("div", { className:"space-y-4" },
+      React.createElement("div", null,
+        React.createElement("label", { className:"text-xs text-white/50 mb-2 block" }, "Nach 6 Monaten (€/Monat)"),
+        React.createElement("input", { type:"number", value:data.umsatz_6||"", onChange:function(e){update("umsatz_6",e.target.value)}, placeholder:"z.B. 5000", className:"w-full rounded-xl p-3 text-sm text-white placeholder-white/25 outline-none transition-all duration-200", style:inputStyle, onFocus:focusIn, onBlur:focusOut })),
+      React.createElement("div", null,
+        React.createElement("label", { className:"text-xs text-white/50 mb-2 block" }, "Nach 12 Monaten (€/Monat)"),
+        React.createElement("input", { type:"number", value:data.umsatz_12||"", onChange:function(e){update("umsatz_12",e.target.value)}, placeholder:"z.B. 15000", className:"w-full rounded-xl p-3 text-sm text-white placeholder-white/25 outline-none transition-all duration-200", style:inputStyle, onFocus:focusIn, onBlur:focusOut }))),
+
+    React.createElement("div", { className:"flex items-center justify-between pt-4" },
+      React.createElement("button", { onClick:function(){if(step>1)setStep(step-1)}, disabled:step===1, className:"flex items-center gap-2 text-sm text-white/40 hover:text-white/70 transition-colors disabled:opacity-20" }, React.createElement(ChevronLeft,{size:16}), " Zurück"),
+      step < TOTAL ?
+        React.createElement(PrimaryButton, { onClick:function(){setStep(step+1)}, disabled:!canNext(), className:"text-xs py-2 px-5" }, "Weiter ", React.createElement(ChevronRight,{size:16})) :
+        React.createElement(PrimaryButton, { onClick:handleGenerate, loading:saving, className:"text-xs py-2 px-5" }, React.createElement(Sparkles,{size:14}), " Businessplan generieren")));
+};
+
+
+const DokumentePage = ({ userData }) => {
+  const { user } = useAuth();
+  var upState = useState([]); var uploads = upState[0]; var setUploads = upState[1];
+  var dragState = useState(false); var dragActive = dragState[0]; var setDragActive = dragState[1];
+  var filterState = useState("all"); var filter = filterState[0]; var setFilter = filterState[1];
+  var loadingState = useState(true); var isLoading = loadingState[0]; var setIsLoading = loadingState[1];
+  var uploadingState = useState(null); var uploading = uploadingState[0]; var setUploading = uploadingState[1];
+  var previewState = useState(null); var previewUrl = previewState[0]; var setPreviewUrl = previewState[1];
+  var bpShowState = useState(false); var showBpGenerator = bpShowState[0]; var setShowBpGenerator = bpShowState[1];
+  var fileInputRef = useRef(null);
+  var activeDocTypeRef = useRef("custom");
+
+  useEffect(function() {
+    if (!user) return;
+    db.getDocuments(user.id).then(function(docs) { setUploads(docs); setIsLoading(false); });
+  }, [user]);
+
+  var formatSize = function(bytes) {
+    if (!bytes) return "";
+    if (bytes < 1024) return bytes + " B";
+    if (bytes < 1048576) return (bytes/1024).toFixed(1) + " KB";
+    return (bytes/1048576).toFixed(1) + " MB";
+  };
+
+  var isImage = function(name) {
+    if (!name) return false;
+    var ext = name.toLowerCase().split(".").pop();
+    return ["png","jpg","jpeg","gif","webp"].indexOf(ext) >= 0;
+  };
+
+  var handleFiles = async function(files, docTypeId) {
+    if (!user) return;
+    var typeId = docTypeId || activeDocTypeRef.current || "custom";
+    setUploading(typeId);
+    for (var i = 0; i < files.length; i++) {
+      await db.uploadDocument(user.id, files[i], typeId);
+    }
+    var docs = await db.getDocuments(user.id);
+    setUploads(docs);
+    setUploading(null);
+    activeDocTypeRef.current = "custom";
+  };
+
+  var handleUploadForType = function(docTypeId) {
+    activeDocTypeRef.current = docTypeId;
+    fileInputRef.current?.click();
+  };
+
+  var handleDownload = async function(storagePath, fileName) {
+    var url = await db.getDocumentUrl(storagePath);
+    if (url) { var a = document.createElement("a"); a.href = url; a.download = fileName; a.click(); }
+  };
+
+  var handleDownloadAll = async function() {
+    for (var i = 0; i < uploads.length; i++) {
+      await handleDownload(uploads[i].file_path, uploads[i].file_name);
+    }
+  };
+
+  var handleDelete = async function(docId, storagePath) {
+    if (!user) return;
+    await db.deleteDocument(user.id, docId, storagePath);
+    setUploads(function(prev) { return prev.filter(function(u) { return u.id !== docId; }); });
+  };
+
+  var handlePreview = async function(doc) {
+    if (!isImage(doc.file_name)) return;
+    var url = await db.getDocumentUrl(doc.file_path);
+    if (url) setPreviewUrl(url);
+  };
+
+  var suggestedDocs = getSuggestedDocTypes(userData);
+  var uploadedDocTypeIds = uploads.map(function(u){return u.doc_type_id});
+  var categories = filter === "all" ? Object.values(DOC_CATEGORIES) : [DOC_CATEGORIES[filter]];
+  var completionPct = Math.round((uploadedDocTypeIds.filter(function(id){return id!=="custom"}).length / Math.max(suggestedDocs.filter(function(d){return d.status!=="optional"}).length, 1)) * 100) || 0;
+
+  // Wenn Businessplan-Generator aktiv → eigene Vollbild-Ansicht
+  if (showBpGenerator) {
+    return React.createElement("div", { className:"max-w-3xl mx-auto py-10 px-6" },
+      React.createElement("button", { onClick:function(){setShowBpGenerator(false)}, className:"mb-6 flex items-center gap-2 text-sm text-white/40 hover:text-white/70 transition-colors" }, React.createElement(ChevronLeft,{size:16}), " Zurück zu Dokumente"),
+      React.createElement("div", { className:"flex items-center gap-3 mb-8" },
+        React.createElement("div", { className:"w-12 h-12 rounded-xl flex items-center justify-center", style:{background:"rgba(139,92,246,.15)"} }, React.createElement(Sparkles,{size:24,className:"text-violet-400"})),
+        React.createElement("div", null,
+          React.createElement("h1", { className:"text-2xl font-bold text-white" }, "Businessplan erstellen"),
+          React.createElement("p", { className:"text-sm text-white/40" }, "Beantworte 10 Fragen und wir generieren deinen Businessplan"))),
+      React.createElement(GlassCard, { className:"p-6" },
+        React.createElement(BusinessplanInline, { onClose:function(){setShowBpGenerator(false)} })));
+  }
+
+  return React.createElement("div", { className:"max-w-6xl mx-auto py-10 px-6" },
+    previewUrl && React.createElement("div", { onClick:function(){setPreviewUrl(null)}, className:"fixed inset-0 z-50 flex items-center justify-center p-8", style:{background:"rgba(0,0,0,0.8)",backdropFilter:"blur(8px)"} },
+      React.createElement("div", { className:"relative max-w-2xl max-h-full" },
+        React.createElement("button", { onClick:function(){setPreviewUrl(null)}, className:"absolute -top-3 -right-3 w-8 h-8 rounded-full bg-white/10 flex items-center justify-center text-white hover:bg-white/20 transition-colors z-10" }, React.createElement(X,{size:16})),
+        React.createElement("img", { src:previewUrl, className:"max-w-full max-h-[80vh] rounded-xl object-contain" }))),
+
+    React.createElement("h1", { className:"text-3xl font-bold text-white mb-1" }, "Deine Unternehmensdokumente"),
+    React.createElement("p", { className:"text-white/45 text-sm mb-7" }, "Alle wichtigen Dokumente an einem Ort"),
+
+    React.createElement("div", { className:"flex items-center gap-4 mb-6 flex-wrap" },
+      React.createElement("div", { className:"flex-1 min-w-[200px]" },
+        React.createElement("div", { className:"flex justify-between text-xs text-white/40 mb-2" }, React.createElement("span",null,"Vollständigkeit"), React.createElement("span",null,completionPct+"%")),
+        React.createElement("div", { className:"w-full h-1.5 rounded-full", style:{background:"rgba(255,255,255,0.08)"} },
+          React.createElement("div", { className:"h-1.5 rounded-full transition-all duration-700", style:{width:completionPct+"%",background:"linear-gradient(90deg, rgba(139,92,246,1), rgba(99,102,241,1))"} }))),
+      React.createElement("div", { className:"flex gap-2 flex-wrap" }, ["all","pitch","planung","markt","recht","foerderung"].map(function(cat) {
+        return React.createElement("button", { key:cat, onClick:function(){setFilter(cat)}, className:"px-3 py-1.5 rounded-lg text-xs font-medium transition-all "+(filter===cat?"bg-violet-500/20 text-violet-300 border border-violet-400/30":"bg-white/5 text-white/40 border border-white/10 hover:bg-white/10") }, cat==="all"?"Alle":DOC_CATEGORIES[cat]?.name.split(" ")[0]);
+      }))),
+
+    React.createElement("div", { className:"grid md:grid-cols-3 gap-6" },
+      React.createElement("div", { className:"md:col-span-1 space-y-4" },
+        React.createElement(GlassCard, { className:"p-6" },
+          React.createElement("div", { className:"flex items-center gap-2 mb-4" }, React.createElement(Upload,{size:16,className:"text-violet-400"}), React.createElement("h3",{className:"text-white font-semibold text-sm"},"Upload")),
+          uploading ? React.createElement("div", { className:"text-center py-8" },
+            React.createElement(Loader2, { size:28, className:"animate-spin text-violet-400 mx-auto mb-3" }),
+            React.createElement("p", { className:"text-sm text-white/60" }, "Wird hochgeladen..."),
+            React.createElement("div", { className:"w-full h-1.5 rounded-full mt-3", style:{background:"rgba(255,255,255,0.08)"} },
+              React.createElement("div", { className:"h-1.5 rounded-full animate-pulse", style:{width:"70%",background:"linear-gradient(90deg,#8b5cf6,#6366f1)"} }))) :
+          React.createElement("div", { onDrop:function(e){e.preventDefault();setDragActive(false);handleFiles(Array.from(e.dataTransfer.files))}, onDragOver:function(e){e.preventDefault();setDragActive(true)}, onDragLeave:function(){setDragActive(false)}, className:"border-2 border-dashed rounded-xl p-8 text-center transition-all "+(dragActive?"border-violet-400 bg-violet-500/10":"border-white/20 hover:border-violet-400/50") },
+            React.createElement(Folder, { size:32, className:"mx-auto mb-3 text-white/30" }),
+            React.createElement("p", { className:"text-sm text-white/60 mb-2" }, "Dateien hierher ziehen"),
+            React.createElement("button", { onClick:function(){activeDocTypeRef.current="custom";fileInputRef.current?.click()}, className:"px-4 py-2 rounded-lg text-xs font-medium bg-white/10 text-white hover:bg-white/15 transition-colors" }, "Datei auswählen"),
+            React.createElement("input", { ref:fileInputRef, type:"file", multiple:true, accept:".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.png,.jpg,.jpeg", className:"hidden", onChange:function(e){handleFiles(Array.from(e.target.files))} }))),
+        uploads.length > 0 && React.createElement(GlassCard, { className:"p-5" },
+          React.createElement("div", { className:"flex items-center justify-between mb-3" },
+            React.createElement("h3", { className:"text-white font-semibold text-sm" }, "Hochgeladen ("+uploads.length+")"),
+            React.createElement("button", { onClick:handleDownloadAll, className:"text-xs text-violet-400 hover:text-violet-300 flex items-center gap-1 transition-colors" }, React.createElement(Download,{size:12}), " Alle")),
+          React.createElement("div", { className:"space-y-2 max-h-96 overflow-y-auto" }, uploads.map(function(doc) {
+            var imgFile = isImage(doc.file_name);
+            return React.createElement("div", { key:doc.id, className:"flex items-center gap-3 py-2 px-3 rounded-lg hover:bg-white/5 transition-colors" },
+              imgFile && React.createElement("button", { onClick:function(){handlePreview(doc)}, className:"w-10 h-10 rounded-lg bg-white/5 flex items-center justify-center flex-shrink-0 overflow-hidden border border-white/10 hover:border-violet-400/30 transition-colors", title:"Vorschau" },
+                React.createElement("span", { className:"text-xs text-white/40" }, "IMG")),
+              React.createElement("div", { className:"flex-1 min-w-0" },
+                React.createElement("p", { className:"text-sm text-white/80 truncate" }, doc.file_name),
+                React.createElement("p", { className:"text-xs text-white/30" }, new Date(doc.uploaded_at).toLocaleDateString("de-DE"), doc.file_size ? " · "+formatSize(doc.file_size) : "")),
+              React.createElement("div", { className:"flex items-center gap-2 flex-shrink-0" },
+                React.createElement("button", { onClick:function(){handleDownload(doc.file_path, doc.file_name)}, className:"text-white/40 hover:text-violet-400 transition-colors" }, React.createElement(Download,{size:14})),
+                React.createElement("button", { onClick:function(){handleDelete(doc.id, doc.file_path)}, className:"text-white/40 hover:text-red-400 transition-colors" }, React.createElement(Trash2,{size:14}))));
+          })))),
+
+      React.createElement("div", { className:"md:col-span-2 space-y-6" }, categories.map(function(cat) {
+        var docsInCat = suggestedDocs.filter(function(d){return d.category===cat.id});
+        if (!docsInCat.length) return null;
+        return React.createElement("div", { key:cat.id },
+          React.createElement("div", { className:"flex items-center gap-2 mb-3" },
+            React.createElement("span", null, cat.icon),
+            React.createElement("h3", { className:"text-white/80 font-semibold text-sm" }, cat.name),
+            React.createElement("span", { className:"text-xs text-white/25" }, "("+docsInCat.length+")")),
+          React.createElement("div", { className:"grid gap-3" }, docsInCat.map(function(doc) {
+            var uploaded = uploads.find(function(u){return u.doc_type_id===doc.id});
+            var isUploadingThis = uploading === doc.id;
+            return React.createElement(GlassCard, { key:doc.id, className:"p-4 hover:border-violet-400/20 transition-all" },
+              React.createElement("div", { className:"flex items-start justify-between gap-4" },
+                React.createElement("div", { className:"flex-1" },
+                  React.createElement("div", { className:"flex items-center gap-2 mb-1 flex-wrap" },
+                    React.createElement("p", { className:"text-white/90 font-medium text-sm" }, doc.title),
+                    React.createElement("span", { className:"text-xs px-2 py-0.5 rounded-full "+(uploaded?"bg-emerald-500/10 text-emerald-300 border border-emerald-400/30":doc.status==="empfohlen"?"bg-violet-500/10 text-violet-300 border border-violet-400/30":"bg-white/5 text-white/40 border border-white/10") }, uploaded?"✓ Hochgeladen":doc.status==="empfohlen"?"Empfohlen":doc.status==="wichtig"?"Wichtig":"Optional")),
+                  React.createElement("p", { className:"text-xs text-white/40" }, doc.description),
+                  uploaded && React.createElement("p", { className:"text-xs text-white/30 mt-1" }, "Hochgeladen am "+new Date(uploaded.uploaded_at).toLocaleDateString("de-DE")+(uploaded.file_size?" · "+formatSize(uploaded.file_size):""))),
+                isUploadingThis ? React.createElement(Loader2, { size:18, className:"animate-spin text-violet-400 flex-shrink-0" }) :
+                !uploaded && React.createElement("div", { className:"flex flex-col gap-2 flex-shrink-0" },
+                  React.createElement("button", { onClick:function(){handleUploadForType(doc.id)}, className:"px-3 py-1.5 rounded-lg text-xs font-medium bg-violet-500/10 text-violet-300 hover:bg-violet-500/20 transition-colors border border-violet-400/20 flex items-center gap-1" }, React.createElement(Upload,{size:12}), " Hochladen"),
+                  doc.id === "businessplan" && React.createElement("button", { onClick:function(){setShowBpGenerator(true)}, className:"px-3 py-1.5 rounded-lg text-xs font-medium bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20 transition-colors border border-emerald-400/20 flex items-center gap-1" }, React.createElement(Sparkles,{size:12}), " Erstellen"))));
+          })));
+      })),
+
+      showBpGenerator && React.createElement("div", { className:"md:col-span-3 mt-6" },
+        React.createElement(GlassCard, { className:"p-6" },
+          React.createElement("div", { className:"flex items-center justify-between mb-6" },
+            React.createElement("div", { className:"flex items-center gap-3" },
+              React.createElement("div", { className:"w-10 h-10 rounded-xl flex items-center justify-center", style:{background:"rgba(139,92,246,.15)"} }, React.createElement(Sparkles,{size:20,className:"text-violet-400"})),
+              React.createElement("div", null,
+                React.createElement("h3", { className:"text-white font-semibold" }, "Businessplan erstellen"),
+                React.createElement("p", { className:"text-xs text-white/40" }, "Beantworte die Fragen und wir generieren deinen Businessplan"))),
+            React.createElement("button", { onClick:function(){setShowBpGenerator(false)}, className:"text-white/40 hover:text-white/70 transition-colors" }, React.createElement(X,{size:20}))),
+          React.createElement(BusinessplanInline, { onClose:function(){setShowBpGenerator(false)} })))));
+};
+
+
+// ═══════════════════════════════════════════════════════════════
+// FOERDER PAGE (loads from Supabase)
+// ═══════════════════════════════════════════════════════════════
+
+const FoerderPage = () => {
+  const { user } = useAuth();
+  var progState = useState([]); var programme = progState[0]; var setProgramme = progState[1];
+  var loadState = useState(true); var isLoading = loadState[0]; var setIsLoading = loadState[1];
+  var filterState = useState("alle"); var tagFilter = filterState[0]; var setTagFilter = filterState[1];
+  var searchState = useState(""); var searchTerm = searchState[0]; var setSearchTerm = searchState[1];
+  var sortState = useState("relevanz"); var sortBy = sortState[0]; var setSortBy = sortState[1];
+  var savedState = useState({}); var savedIds = savedState[0]; var setSavedIds = savedState[1];
+  var profileState = useState(null); var profile = profileState[0]; var setProfile = profileState[1];
+
+  useEffect(function() {
+    if (!user) return;
+    (async function() {
+      var ob = await db.getOnboarding(user.id);
+      setProfile(ob);
+      var progs = await db.getFoerderprogramme(ob);
+      setProgramme(progs);
+      var ct = await db.getCompletedTasks(user.id);
+      var sv = {};
+      Object.keys(ct).forEach(function(k) { if (k.startsWith("foerder_saved_")) sv[k.replace("foerder_saved_","")] = true; });
+      setSavedIds(sv);
+      setIsLoading(false);
+    })();
+  }, [user]);
+
+  var toggleSaved = function(progId) {
+    var isSaved = savedIds[progId];
+    setSavedIds(function(p) { var n = Object.assign({}, p); if (n[progId]) delete n[progId]; else n[progId] = true; return n; });
+    if (user) db.toggleTask(user.id, "foerder_saved_"+progId, !isSaved);
+  };
+
+  var calcPassung = function(p) {
+    if (!profile) return 0;
+    var max = 7; var score = 0;
+    if (p.phasen && p.phasen.length > 0 && p.phasen.includes(profile.phase)) score += 3;
+    if (p.bundeslaender && p.bundeslaender.length > 0 && p.bundeslaender.includes(profile.bundesland)) score += 2;
+    else if (!p.bundeslaender || p.bundeslaender.length === 0) score += 1;
+    if (p.branchen && p.branchen.length > 0 && p.branchen.includes(profile.branche)) score += 2;
+    else if (!p.branchen || p.branchen.length === 0) score += 1;
+    return Math.round((score/max)*100);
+  };
+
+  var tagColors = {"Stipendium":"rgba(139,92,246,0.3)","Kredit":"rgba(59,130,246,0.3)","Zuschuss":"rgba(16,185,129,0.3)","Beteiligung":"rgba(245,158,11,0.3)"};
+  var tags = ["alle","Stipendium","Kredit","Zuschuss","Beteiligung"];
+
+  var filtered = useMemo(function() {
+    var list = programme.slice();
+    if (tagFilter !== "alle") list = list.filter(function(p){return p.tag === tagFilter});
+    if (searchTerm.length > 1) {
+      var s = searchTerm.toLowerCase();
+      list = list.filter(function(p){return (p.name||"").toLowerCase().includes(s)||(p.beschreibung||"").toLowerCase().includes(s)});
+    }
+    if (sortBy === "summe") list.sort(function(a,b){ var sa=parseInt((a.summe||"0").replace(/\D/g,""))||0; var sb=parseInt((b.summe||"0").replace(/\D/g,""))||0; return sb-sa; });
+    else if (sortBy === "alpha") list.sort(function(a,b){return (a.name||"").localeCompare(b.name||"")});
+    return list;
+  }, [programme, tagFilter, searchTerm, sortBy]);
+
+  var passendCount = programme.filter(function(p){return calcPassung(p)>=60}).length;
+  var savedCount = Object.keys(savedIds).length;
+
+  if (isLoading) return React.createElement("div", { className:"max-w-4xl mx-auto py-20 px-6 text-center" },
+    React.createElement(Loader2, { size:32, className:"animate-spin text-violet-400 mx-auto mb-4" }),
+    React.createElement("p", { className:"text-white/40" }, "Förderprogramme werden geladen..."));
+
+  return React.createElement("div", { className:"max-w-4xl mx-auto py-10 px-6" },
+    React.createElement("h1", { className:"text-3xl font-bold text-white mb-1" }, "Passende Förderprogramme"),
+    React.createElement("p", { className:"text-white/45 text-sm mb-5" }, programme.length+" Programme gefunden · "+passendCount+" passen zu deinem Profil · "+savedCount+" gemerkt"),
+
+    React.createElement("div", { className:"flex flex-wrap items-center gap-3 mb-4" },
+      React.createElement("div", { className:"relative flex-1 min-w-[200px]" },
+        React.createElement(Search, { size:16, className:"absolute left-3 top-1/2 -translate-y-1/2 text-white/30" }),
+        React.createElement("input", { value:searchTerm, onChange:function(e){setSearchTerm(e.target.value)}, placeholder:"Programm suchen...", className:"w-full rounded-xl p-3 pl-10 text-sm text-white placeholder-white/25 outline-none transition-all", style:{background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.1)"} })),
+      React.createElement("select", { value:sortBy, onChange:function(e){setSortBy(e.target.value)}, className:"rounded-xl px-3 py-3 text-sm text-white/70 outline-none appearance-none", style:{background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.1)"} },
+        React.createElement("option", { value:"relevanz", style:{background:"#111"} }, "Sortierung: Relevanz"),
+        React.createElement("option", { value:"summe", style:{background:"#111"} }, "Sortierung: Fördersumme"),
+        React.createElement("option", { value:"alpha", style:{background:"#111"} }, "Sortierung: A-Z"))),
+
+    React.createElement("div", { className:"flex flex-wrap gap-2 mb-6" }, tags.map(function(t) {
+      var isSel = tagFilter === t;
+      return React.createElement("button", { key:t, onClick:function(){setTagFilter(t)}, className:"px-4 py-2 rounded-xl text-sm font-medium transition-all border", style:{
+        borderColor:isSel?"rgba(139,92,246,0.8)":"rgba(255,255,255,0.12)",
+        background:isSel?"rgba(139,92,246,0.15)":"rgba(255,255,255,0.03)",
+        color:isSel?"#a78bfa":"rgba(255,255,255,0.6)"
+      }}, t === "alle" ? "Alle" : t);
+    })),
+
+    filtered.length === 0 ? React.createElement("div", { className:"text-center py-12" },
+      React.createElement(Search, { size:40, className:"mx-auto mb-4 text-white/20" }),
+      React.createElement("p", { className:"text-white/40" }, "Keine Programme gefunden.")) :
+    React.createElement("div", { className:"space-y-4" }, filtered.map(function(p) {
+      var passung = calcPassung(p);
+      var isSaved = savedIds[p.id];
+      return React.createElement(GlassCard, { key:p.id, className:"p-6" },
+        React.createElement("div", { className:"flex items-start justify-between mb-3 flex-wrap gap-2" },
+          React.createElement("div", { className:"flex items-center gap-2 flex-wrap flex-1" },
+            React.createElement("h3", { className:"text-white font-semibold" }, p.name),
+            React.createElement("span", { className:"text-xs px-2 py-0.5 rounded-full", style:{background:tagColors[p.tag]||"rgba(255,255,255,0.1)",color:"rgba(255,255,255,0.8)"} }, p.tag),
+            React.createElement("span", { className:"text-xs text-white/30" }, p.region)),
+          React.createElement("div", { className:"flex items-center gap-3" },
+            React.createElement("div", { className:"text-right" },
+              React.createElement("p", { className:"text-xs text-white/40" }, "Passung"),
+              React.createElement("p", { className:"text-sm font-bold "+(passung>=70?"text-emerald-400":passung>=40?"text-amber-400":"text-white/40") }, passung+"%")),
+            React.createElement("button", { onClick:function(){toggleSaved(p.id)}, className:"p-2 rounded-lg transition-all "+(isSaved?"bg-violet-500/20 text-violet-400":"text-white/30 hover:text-violet-400 hover:bg-white/5") },
+              React.createElement("svg", { xmlns:"http://www.w3.org/2000/svg", width:18, height:18, viewBox:"0 0 24 24", fill:isSaved?"currentColor":"none", stroke:"currentColor", strokeWidth:"2", strokeLinecap:"round", strokeLinejoin:"round" },
+                React.createElement("path", { d:"M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" }))))),
+        React.createElement("p", { className:"text-sm text-white/60 mb-3" }, p.beschreibung),
+        p.warum && React.createElement("div", { className:"p-3 rounded-xl mb-4", style:{background:"rgba(139,92,246,.07)",border:"1px solid rgba(139,92,246,.15)"} },
+          React.createElement("p", { className:"text-xs text-violet-300/60 mb-0.5" }, "Warum passend?"),
+          React.createElement("p", { className:"text-xs text-white/65" }, p.warum)),
+        React.createElement("div", { className:"flex items-center justify-between" },
+          React.createElement("span", { className:"text-xl font-bold text-white" }, p.summe),
+          React.createElement("a", { href:p.link, target:"_blank", rel:"noopener noreferrer", className:"text-xs text-violet-400 hover:text-violet-300 flex items-center gap-1" }, "Details ", React.createElement(ArrowRight,{size:12}))));
+    })));
+};
+
+
+// ═══════════════════════════════════════════════════════════════
+// TOP NAV (with logout)
+// ═══════════════════════════════════════════════════════════════
+
+const TopNav = ({ activePage, onNavigate }) => {
+  var openState = useState(false); var open = openState[0]; var setOpen = openState[1];
+  var tabs = [{id:"dashboard",label:"Dashboard",Icon:BarChart2},{id:"gewerbe",label:"Gewerbeanmeldung",Icon:Building},{id:"dokumente",label:"Dokumente",Icon:FileText},{id:"foerderprogramme",label:"Förderprogramme",Icon:Award}];
+
+  var handleLogout = async function() { await supabase.auth.signOut(); };
+
+  return React.createElement("nav", { className:"sticky top-0 z-50 border-b border-white/10", style:{background:"rgba(9,9,15,0.96)",backdropFilter:"blur(20px)"} },
+    React.createElement("div", { className:"max-w-7xl mx-auto px-6" },
+      React.createElement("div", { className:"flex items-center justify-between h-16" },
+        React.createElement("img", { src:LOGO_SRC, alt:"CoFounder AI", style:{height:40,objectFit:"contain"} }),
+        React.createElement("div", { className:"hidden md:flex items-center gap-1" },
+          tabs.map(function(t) { return React.createElement("button", { key:t.id, onClick:function(){onNavigate(t.id)}, className:"flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all "+(activePage===t.id?"bg-violet-500/20 text-violet-300 border border-violet-400/30":"text-white/55 hover:text-white/90 hover:bg-white/5") }, React.createElement(t.Icon,{size:16}), " ", t.label); }),
+          React.createElement("button", { onClick:handleLogout, className:"ml-4 flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-white/40 hover:text-white/70 hover:bg-white/5 transition-all" }, React.createElement(LogOut,{size:16}), "Logout")),
+        React.createElement("button", { onClick:function(){setOpen(!open)}, className:"md:hidden p-2 text-white/60" }, open ? React.createElement(X,{size:22}) : React.createElement(Menu,{size:22}))),
+      open && React.createElement("div", { className:"md:hidden pb-4 space-y-1" },
+        tabs.map(function(t) { return React.createElement("button", { key:t.id, onClick:function(){onNavigate(t.id);setOpen(false)}, className:"w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm "+(activePage===t.id?"bg-violet-500/20 text-violet-300":"text-white/55 hover:bg-white/5") }, React.createElement(t.Icon,{size:16}), " ", t.label); }),
+        React.createElement("button", { onClick:handleLogout, className:"w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm text-white/40 hover:bg-white/5" }, React.createElement(LogOut,{size:16}), " Logout"))));
+};
+
+
+// ═══════════════════════════════════════════════════════════════
+// LANDING PAGE (simplified - preserved design)
+// ═══════════════════════════════════════════════════════════════
+
+const LandingPage = ({ onStart }) => {
+  var menuState = useState(false); var menuOpen = menuState[0]; var setMenuOpen = menuState[1];
+  var faqState = useState(null); var activeFaq = faqState[0]; var setActiveFaq = faqState[1];
+  var features = [
+    {icon:React.createElement(Search,{size:20}),title:"Förder-Matching",desc:"KI analysiert dein Profil und findet passende Förderprogramme."},
+    {icon:React.createElement(Map,{size:20}),title:"90-Tage Roadmap",desc:"Klare, priorisierte Aktionsschritte für deine ersten 3 Monate."},
+    {icon:React.createElement(CheckSquare,{size:20}),title:"Checklisten",desc:"Schritt-für-Schritt für Anmeldungen und Behördengänge."},
+    {icon:React.createElement(FileText,{size:20}),title:"Dokument-Vorlagen",desc:"Vorlagen für Businessplan, Finanzplan und Fördermittelanträge."}
+  ];
+  var faqs = [
+    {q:"Ist CoFounder AI kostenlos?",a:"Der Basis-Zugang ist dauerhaft kostenlos. Pro gibt es ab 29 €/Monat."},
+    {q:"Woher stammen die Förderdaten?",a:"Aus offiziellen Quellen wie KfW, BMWK und regionalen Förderbanken."},
+    {q:"Für wen ist die App?",a:"Für alle, die in Deutschland gründen möchten – Solopreneure, Startups, Freelancer."},
+    {q:"Datenschutz?",a:"Alle Daten auf deutschen/EU-Servern, DSGVO-konform. Keine Datenweitergabe."}
+  ];
+
+  return React.createElement("div", { className:"min-h-screen text-white" },
+    React.createElement("header", { className:"fixed top-0 left-0 right-0 z-50 px-6 py-4", style:{backdropFilter:"blur(12px)",background:"rgba(10,10,18,0.7)",borderBottom:"1px solid rgba(255,255,255,0.06)"} },
+      React.createElement("div", { className:"max-w-6xl mx-auto flex items-center justify-between" },
+        React.createElement(Logo, { size:"sm" }),
+        React.createElement("div", { className:"hidden md:flex items-center gap-6" },
+          React.createElement(SecondaryButton, { onClick:onStart, className:"py-2 px-4 text-xs" }, "Anmelden / Registrieren")),
+        React.createElement("button", { className:"md:hidden text-white/60", onClick:function(){setMenuOpen(!menuOpen)} }, menuOpen ? React.createElement(X,{size:20}) : React.createElement(Menu,{size:20})))),
+
+    React.createElement("section", { className:"pt-28 pb-20 px-6" },
+      React.createElement("div", { className:"max-w-6xl mx-auto" },
+        React.createElement(ContainerFrame, null,
+          React.createElement("div", { className:"min-h-[440px] flex items-center" },
+            React.createElement("div", { className:"flex flex-col justify-center p-8 md:p-14 w-full max-w-2xl" },
+              React.createElement("div", { className:"inline-flex items-center gap-2 text-xs text-violet-400 mb-6 px-3 py-1.5 rounded-full border border-violet-400/20 w-fit", style:{background:"rgba(139,92,246,0.08)"} }, React.createElement(Sparkles,{size:12}), "KI-gestütztes Gründungs-Tool"),
+              React.createElement("h1", { className:"text-4xl md:text-5xl lg:text-6xl font-bold leading-tight mb-6 text-white", style:{letterSpacing:"-0.02em"} }, "Gründen, ohne im", React.createElement("br"), React.createElement("span",{style:{background:"linear-gradient(135deg, #a78bfa, #818cf8)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}},"Papierkram"), " zu versinken."),
+              React.createElement("p", { className:"text-white/55 text-lg leading-relaxed mb-8 max-w-md" }, "CoFounder AI findet passende Förderprogramme und erstellt eine klare Roadmap für deine nächsten 90 Tage."),
+              React.createElement("div", { className:"flex flex-wrap gap-3" },
+                React.createElement(PrimaryButton, { onClick:onStart, className:"text-base py-3.5" }, "Kostenlos starten ", React.createElement(ArrowRight,{size:16}))),
+              React.createElement("div", { className:"flex items-center gap-4 mt-8 text-xs text-white/35" },
+                React.createElement("span", { className:"flex items-center gap-1" }, React.createElement(Check,{size:12,className:"text-violet-400"}), " Kostenlos"),
+                React.createElement("span", { className:"flex items-center gap-1" }, React.createElement(Check,{size:12,className:"text-violet-400"}), " DSGVO-konform"),
+                React.createElement("span", { className:"flex items-center gap-1" }, React.createElement(Check,{size:12,className:"text-violet-400"}), " Keine Kreditkarte"))))))),
+
+    React.createElement("section", { id:"features", className:"py-20 px-6" },
+      React.createElement("div", { className:"max-w-6xl mx-auto" },
+        React.createElement("div", { className:"text-center mb-14" },
+          React.createElement("h2", { className:"text-3xl md:text-4xl font-bold text-white mb-4" }, "Warum CoFounder AI?"),
+          React.createElement("p", { className:"text-white/45 max-w-md mx-auto" }, "Alles für einen erfolgreichen Start – an einem Ort.")),
+        React.createElement("div", { className:"grid md:grid-cols-2 lg:grid-cols-4 gap-4" }, features.map(function(f,i) {
+          return React.createElement(GlassCard, { key:i, className:"p-6" },
+            React.createElement("div", { className:"w-10 h-10 rounded-xl flex items-center justify-center mb-4 text-violet-400", style:{background:"rgba(139,92,246,0.12)"} }, f.icon),
+            React.createElement("h3", { className:"text-white font-semibold mb-2" }, f.title),
+            React.createElement("p", { className:"text-white/45 text-sm" }, f.desc));
+        })))),
+
+    React.createElement("section", { id:"faq", className:"py-20 px-6" },
+      React.createElement("div", { className:"max-w-2xl mx-auto" },
+        React.createElement("h2", { className:"text-3xl font-bold text-white mb-8 text-center" }, "Häufige Fragen"),
+        React.createElement("div", { className:"space-y-3" }, faqs.map(function(faq,i) {
+          return React.createElement(GlassCard, { key:i, className:"overflow-hidden" },
+            React.createElement("button", { className:"w-full flex items-center justify-between p-5 text-left", onClick:function(){setActiveFaq(activeFaq===i?null:i)} },
+              React.createElement("span", { className:"text-white/80 font-medium text-sm" }, faq.q),
+              React.createElement(ChevronDown, { size:16, className:"text-white/40 flex-shrink-0 ml-4 transition-transform duration-200", style:{transform:activeFaq===i?"rotate(180deg)":"rotate(0deg)"} })),
+            activeFaq === i && React.createElement("div", { className:"px-5 pb-5 text-sm text-white/50 leading-relaxed border-t border-white/5 pt-4" }, faq.a));
+        })))),
+
+    React.createElement("section", { className:"py-20 px-6 pb-24" },
+      React.createElement("div", { className:"max-w-2xl mx-auto text-center" },
+        React.createElement("h2", { className:"text-3xl font-bold text-white mb-4" }, "Bereit loszulegen?"),
+        React.createElement("p", { className:"text-white/45 mb-8" }, "Starte in weniger als 5 Minuten."),
+        React.createElement(PrimaryButton, { onClick:onStart, className:"text-base py-4 px-10 mx-auto" }, "Kostenlos starten ", React.createElement(ArrowRight,{size:16})))),
+
+    React.createElement("footer", { className:"border-t border-white/8 py-6 px-6 text-center text-xs text-white/25" }, "© 2025 CoFounder AI · Datenschutz · Impressum"));
+};
+
+
+// ═══════════════════════════════════════════════════════════════
+// MAIN APP
+// ═══════════════════════════════════════════════════════════════
+
+function AppContent() {
+  const { user, loading } = useAuth();
+  var screenState = useState(user ? "app" : "landing"); var screen = screenState[0]; var setScreen = screenState[1];
+  var userData = useState(null); var ud = userData[0]; var setUd = userData[1];
+  var pageState = useState("dashboard"); var page = pageState[0]; var setPage = pageState[1];
+
+  useEffect(function() {
+    if (user && screen === "landing") {
+      // Check if user has onboarding data
+      db.getOnboarding(user.id).then(function(ob) {
+        if (ob && ob.onboarding_complete) { setUd(ob); setScreen("app"); }
+        else setScreen("onboarding");
+      });
+    }
+    if (!user && !loading) setScreen("landing");
+  }, [user, loading]);
+
+  if (loading) return React.createElement("div", { style:{display:"flex",alignItems:"center",justifyContent:"center",minHeight:"100vh"} },
+    React.createElement(Loader2, { size:32, className:"animate-spin text-violet-400" }));
+
+  return React.createElement("div", { style:{minHeight:"100vh",background:"#09090f",position:"relative",overflow:"hidden"} },
+    React.createElement(GrainOverlay),
+    React.createElement("div", { style:{position:"fixed",inset:0,zIndex:0,pointerEvents:"none",background:"radial-gradient(ellipse at center,transparent 40%,rgba(0,0,0,.6) 100%)"} }),
+    React.createElement("div", { style:{position:"fixed",top:"-10%",left:"30%",width:600,height:400,borderRadius:"50%",zIndex:0,pointerEvents:"none",background:"radial-gradient(circle,rgba(99,102,241,.06),transparent 70%)",filter:"blur(60px)"} }),
+    React.createElement("div", { style:{position:"relative",zIndex:1} },
+      screen === "landing" && React.createElement(LandingPage, { onStart:function(){if(user)setScreen("onboarding");else setScreen("auth")} }),
+      screen === "auth" && React.createElement(AuthPage, { onSuccess:function(){} }),
+      screen === "onboarding" && React.createElement(Onboarding, { onComplete:function(d){setUd(d);setScreen("app")}, onSkip:function(){setUd(null);setScreen("app")} }),
+      screen === "app" && React.createElement(React.Fragment, null,
+        React.createElement(TopNav, { activePage:page, onNavigate:setPage }),
+        React.createElement("div", { className:"fadeIn" },
+          page === "dashboard" && React.createElement(Dashboard, { userData:ud, onNavigate:setPage }),
+          page === "gewerbe" && React.createElement(GewerbePage),
+          page === "dokumente" && React.createElement(DokumentePage, { userData:ud }),
+          page === "foerderprogramme" && React.createElement(FoerderPage)))));
+}
+
+function App() {
+  return React.createElement(AuthProvider, null, React.createElement(AppContent));
+}
+
+try {
+  ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(App));
+} catch(e) {
+  document.getElementById("root").innerHTML =
+    '<div style="color:white;padding:40px;font-family:sans-serif;text-align:center">' +
+    '<h2>Fehler</h2><pre style="color:rgba(255,255,255,.5);font-size:12px;text-align:left">' +
+    e.message + '\n' + (e.stack||'') + '</pre>' +
+    '<button onclick="location.reload()" style="margin-top:20px;padding:10px 24px;background:#8b5cf6;color:white;border:none;border-radius:8px;cursor:pointer">Neu laden</button>' +
+    '</div>';
+  console.error(e);
+}
+
+})();
+</script>
+<!--
+═══════════════════════════════════════════════════════════════
+SQL: Neue Spalte für Businessplan-Daten in profiles
+═══════════════════════════════════════════════════════════════
+
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS businessplan_data jsonb;
+
+═══════════════════════════════════════════════════════════════
+SQL: Tabelle saved_foerderprogramme (Alternative: wird über roadmap_progress mit Prefix "foerder_saved_" gelöst)
+═══════════════════════════════════════════════════════════════
+
+-- Gewerbe-Checklisten-Fortschritt wird über roadmap_progress mit task_ids wie "gewerbe_einzel_1" etc. gespeichert.
+-- Gespeicherte Förderprogramme werden über roadmap_progress mit task_ids wie "foerder_saved_{programm_id}" gespeichert.
+-- Keine neuen Tabellen nötig — alles läuft über die bestehende roadmap_progress Tabelle.
+
+-->
+</body>
+</html>
