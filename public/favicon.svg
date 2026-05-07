@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 97">
+  <style>
+    .bg { fill: #000; }
+    .fg { fill: none; stroke: #fff; stroke-linecap: round; stroke-linejoin: round; stroke-width: 7; }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #fff; }
+      .fg { stroke: #000; }
+    }
+  </style>
+  <!-- Background fill so icon is visible -->
+  <path class="bg" d="M 10 24 A 16 16 0 0 1 26 8 L 74 8 A 16 16 0 0 1 90 24 L 90 54 A 16 16 0 0 1 74 70 L 26 70 L 10 90 Z"/>
+  <!-- Stroke outline -->
+  <path class="fg" d="M 10 24 A 16 16 0 0 1 26 8 L 74 8 A 16 16 0 0 1 90 24 L 90 54 A 16 16 0 0 1 74 70 L 26 70 L 10 90 Z"/>
+  <!-- C letter -->
+  <path class="fg" d="M 44 30 A 13 13 0 1 0 44 48"/>
+  <!-- O letter -->
+  <circle class="fg" cx="65" cy="39" r="13"/>
+</svg>

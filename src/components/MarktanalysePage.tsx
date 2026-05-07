@@ -178,7 +178,7 @@ export function MarktanalysePage({ userData, onNavigate }: { userData: any; onNa
     error && React.createElement("div", { className:"mb-4 p-3 rounded-lg text-xs text-amber-300/80 border border-amber-400/20", style:{background:"var(--warning-bg)"} }, error),
 
     React.createElement("div", { className:"flex gap-1 mb-6 overflow-x-auto pb-1" }, sections.map(function(s: any) {
-      return React.createElement("button", { key:s.id, onClick:function(){setActiveSection(s.id)}, className:"flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium whitespace-nowrap transition-all " + (activeSection===s.id ? "bg-emerald-500/15 text-white/70 border border-emerald-400/25" : "bg-white/5 text-white/35 border border-white/[0.06] hover:bg-white/[0.08] hover:text-white/50") },
+      return React.createElement("button", { key:s.id, onClick:function(){setActiveSection(s.id)}, className:"flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium whitespace-nowrap transition-all " + (activeSection===s.id ? "bg-white/[0.08] text-white/70 border border-white/[0.1]" : "bg-white/5 text-white/35 border border-white/[0.06] hover:bg-white/[0.08] hover:text-white/50") },
         React.createElement(s.Icon, { size:12 }), s.label);
     })),
 

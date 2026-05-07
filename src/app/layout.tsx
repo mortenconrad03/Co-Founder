@@ -9,6 +9,9 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="de">
+      <head>
+        <link rel="icon" href="/favicon.svg?v=2" type="image/svg+xml" />
+      </head>
       <body>
         <AuthProvider>
           {children}
