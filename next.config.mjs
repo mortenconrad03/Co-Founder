@@ -4,5 +4,6 @@ const nextConfig = {
   basePath: '/Co-Founder',
   assetPrefix: '/Co-Founder',
   eslint: { ignoreDuringBuilds: true },
+  images: { unoptimized: true },
 }
 export default nextConfig
