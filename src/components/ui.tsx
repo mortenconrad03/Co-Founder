@@ -21,10 +21,10 @@ export const Sparkline = function(props: any) {
     React.createElement("circle", { cx:w, cy:lastY, r:"2.5", fill:color }));
 };
 
-import NextImage from 'next/image';
+const BASE = (process.env.NEXT_PUBLIC_BASE_PATH ?? '');
 export const Logo = ({ size = "sm" }: { size?: string }) => {
   var px = size === "lg" ? 48 : size === "md" ? 36 : 28;
-  return React.createElement(NextImage, { src: '/logo.png', alt: "CoFounder AI", width: px, height: px, style: { height: px, width: "auto", objectFit: "contain", filter: "var(--logo-filter)" } });
+  return React.createElement("img", { src: BASE + '/logo.png', alt: "CoFounder AI", width: px, height: px, style: { height: px, width: "auto", objectFit: "contain", filter: "var(--logo-filter)" } });
 };
 
 export const GrainOverlay = () => React.createElement("div", { style: { position:"fixed",inset:0,zIndex:0,pointerEvents:"none", backgroundImage:'url("data:image/svg+xml,%3Csvg viewBox=\'0 0 256 256\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cfilter id=\'noise\'%3E%3CfeTurbulence type=\'fractalNoise\' baseFrequency=\'0.9\' numOctaves=\'4\' stitchTiles=\'stitch\'/%3E%3C/filter%3E%3Crect width=\'100%25\' height=\'100%25\' filter=\'url(%23noise)\' opacity=\'0.03\'/%3E%3C/svg%3E")', backgroundRepeat:"repeat",opacity:"var(--grain-opacity)" }});
