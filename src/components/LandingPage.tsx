@@ -1,17 +1,26 @@
 'use client';
-/* eslint-disable @typescript-eslint/no-explicit-any */
-
-import React, { useState } from 'react';
+import React, { useState, useEffect, useId } from 'react';
 import {
   Lightbulb, FileText, TrendingUp, Award, Scale, Target,
   MessageCircle, BarChart2, Sparkles, Rocket, ArrowRight,
   Check, ChevronDown, X, Menu
 } from '@/components/icons';
-import { Logo, PrimaryButton, SecondaryButton } from '@/components/ui';
+import { Logo, PrimaryButton } from '@/components/ui';
 
 export function LandingPage({ onStart }: { onStart: () => void }) {
   var menuState = useState(false); var menuOpen = menuState[0]; var setMenuOpen = menuState[1];
   var faqState = useState<number | null>(null); var activeFaq = faqState[0]; var setActiveFaq = faqState[1];
+  var noiseId = useId().replace(/:/g, '');
+
+  useEffect(function() {
+    var obs = new IntersectionObserver(function(entries) {
+      entries.forEach(function(e) {
+        if (e.isIntersecting) { e.target.classList.add('sr-vis'); obs.unobserve(e.target); }
+      });
+    }, { threshold: 0.07, rootMargin: '0px 0px -30px 0px' });
+    document.querySelectorAll('.sr').forEach(function(el) { obs.observe(el); });
+    return function() { obs.disconnect(); };
+  }, []);
 
   var features = [
     {icon:Lightbulb, title:"Idee validieren", desc:"KI-Marktanalyse mit Wettbewerbern, Marktgr\xf6\xdfe, Trends und deiner optimalen Positionierung."},
@@ -39,102 +48,181 @@ export function LandingPage({ onStart }: { onStart: () => void }) {
     {q:"Was passiert mit meinen Daten?", a:"Alle Daten liegen auf EU-Servern, DSGVO-konform. Keine Weitergabe an Dritte. Deine Idee bleibt deine Idee."}
   ];
 
-  return React.createElement("div", { className:"min-h-screen text-white" },
+  var steps = [
+    {n:"01", t:"Erz\xe4hl uns von deiner Idee", d:"Ein kurzes Onboarding: Was machst du, wer sind deine Kunden, in welcher Phase bist du? Die KI baut daraus dein pers\xf6nliches Gr\xfcnderprofil."},
+    {n:"02", t:"Lass die KI f\xfcr dich arbeiten", d:"Businessplan, Finanzplan, Marktanalyse, F\xf6rderprogramme, Rechtsform-Empfehlung — alles auf Knopfdruck, alles individuell f\xfcr dich generiert."},
+    {n:"03", t:"Setze um — wir behalten den \xdcberblick", d:"Deine 90-Tage-Roadmap zeigt dir Woche f\xfcr Woche die n\xe4chsten Schritte. Das Cockpit erinnert dich an Fristen und feiert deine Fortschritte."}
+  ];
 
-    React.createElement("header", { className:"fixed top-0 left-0 right-0 z-50 px-6 py-4", style:{backdropFilter:"blur(12px)",background:"var(--bg-header-blur)"} },
-      React.createElement("div", { className:"max-w-6xl mx-auto flex items-center justify-between" },
-        React.createElement(Logo, { size:"sm" }),
-        React.createElement("div", { className:"hidden md:flex items-center gap-6" },
-          React.createElement("a", { href:"#features", className:"text-xs text-white/50 hover:text-white/80 transition-colors" }, "Features"),
-          React.createElement("a", { href:"#how", className:"text-xs text-white/50 hover:text-white/80 transition-colors" }, "So funktioniert's"),
-          React.createElement("a", { href:"#faq", className:"text-xs text-white/50 hover:text-white/80 transition-colors" }, "FAQ"),
-          React.createElement(SecondaryButton, { onClick:onStart, className:"py-2 px-4 text-xs" }, "Anmelden / Registrieren")),
-        React.createElement("button", { className:"md:hidden text-white/60", onClick:function(){setMenuOpen(!menuOpen)} }, menuOpen ? React.createElement(X,{size:20}) : React.createElement(Menu,{size:20})))),
+  var glass: React.CSSProperties = {
+    background: "rgba(255,255,255,0.03)",
+    backdropFilter: "blur(18px)",
+    WebkitBackdropFilter: "blur(18px)",
+    border: "1px solid rgba(255,255,255,0.07)"
+  };
 
-    React.createElement("section", { className:"pt-36 pb-24 px-6" },
-      React.createElement("div", { className:"max-w-4xl mx-auto text-center" },
-        React.createElement("div", { className:"inline-flex items-center gap-2 text-xs text-white/55 mb-8 px-3 py-1.5 rounded-full", style:{background:"var(--surface-5)"} },
-          React.createElement(Sparkles,{size:12,className:"text-emerald-400/70"}),
-          "Dein KI-Co-Founder f\xfcr die Unternehmensgr\xfcndung"),
-        React.createElement("h1", { className:"text-5xl md:text-6xl lg:text-7xl font-medium text-white mb-8", style:{letterSpacing:"-0.04em",lineHeight:"0.95"} },
-          "Gr\xfcnde dein Unternehmen — ",
-          React.createElement("span",{style:{background:"var(--hero-gradient)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}},"mit KI an deiner Seite.")),
-        React.createElement("p", { className:"text-white/55 text-lg md:text-xl leading-relaxed mb-10 max-w-2xl mx-auto" },
-          "Von der ersten Idee bis zum eingetragenen Unternehmen: Businessplan, Finanzplan, F\xf6rderprogramme, Rechtsform, Beh\xf6rdeng\xe4nge — alles in einer Plattform, alles auf dich zugeschnitten."),
-        React.createElement("div", { className:"flex flex-wrap gap-3 justify-center mb-10" },
-          React.createElement(PrimaryButton, { onClick:onStart, className:"text-base py-3.5 px-7" },
-            "Kostenlos starten ", React.createElement(ArrowRight,{size:16}))),
-        React.createElement("div", { className:"flex items-center gap-6 justify-center text-xs text-white/35 flex-wrap" },
-          React.createElement("span", { className:"flex items-center gap-1.5" }, React.createElement(Check,{size:12,className:"text-emerald-400/70"}), "Komplett kostenlos"),
-          React.createElement("span", { className:"flex items-center gap-1.5" }, React.createElement(Check,{size:12,className:"text-emerald-400/70"}), "DSGVO-konform"),
-          React.createElement("span", { className:"flex items-center gap-1.5" }, React.createElement(Check,{size:12,className:"text-emerald-400/70"}), "Keine Kreditkarte"),
-          React.createElement("span", { className:"flex items-center gap-1.5" }, React.createElement(Check,{size:12,className:"text-emerald-400/70"}), "In 5 Minuten startklar")))),
+  var c = {
+    hi:  "#ffffff",
+    mid: "rgba(255,255,255,0.65)",
+    low: "rgba(255,255,255,0.42)",
+    dim: "rgba(255,255,255,0.28)",
+    ghost: "rgba(255,255,255,0.18)",
+    icon: "rgba(255,255,255,0.55)"
+  };
 
-    React.createElement("section", { className:"py-20 px-6" },
-      React.createElement("div", { className:"max-w-5xl mx-auto" },
-        React.createElement("div", { className:"grid md:grid-cols-3 gap-12 md:gap-16" }, pillars.map(function(p: any, i: number) {
-          return React.createElement("div", { key:i, className:"text-center md:text-left" },
-            React.createElement("div", { className:"w-12 h-12 rounded-2xl flex items-center justify-center mb-5 mx-auto md:mx-0", style:{background:"var(--surface-8)"} },
-              React.createElement(p.icon, { size:22, className:"text-white/70" })),
-            React.createElement("h3", { className:"text-white text-xl font-medium mb-3", style:{letterSpacing:"-0.01em"} }, p.title),
-            React.createElement("p", { className:"text-white/50 text-sm leading-relaxed" }, p.desc));
-        })))),
+  return React.createElement("div", { style:{minHeight:"100vh",color:"#fff",background:"#0b0b0f",position:"relative",overflowX:"hidden"} },
 
-    React.createElement("section", { id:"features", className:"py-24 px-6" },
-      React.createElement("div", { className:"max-w-5xl mx-auto" },
-        React.createElement("div", { className:"text-center mb-16" },
-          React.createElement("p", { className:"text-xs uppercase tracking-widest text-white/40 mb-3" }, "Was du bekommst"),
-          React.createElement("h2", { className:"text-4xl md:text-5xl font-medium text-white mb-4", style:{letterSpacing:"-0.03em"} }, "Acht Werkzeuge. Eine Plattform."),
-          React.createElement("p", { className:"text-white/45 max-w-xl mx-auto text-base" },
-            "Jedes einzelne Tool w\xe4re eine eigene App wert. Bei CoFounder AI bekommst du sie alle — perfekt aufeinander abgestimmt.")),
-        React.createElement("div", { className:"grid md:grid-cols-2 gap-x-12 gap-y-10" }, features.map(function(f: any, i: number) {
-          return React.createElement("div", { key:i, className:"flex gap-5" },
-            React.createElement("div", { className:"flex-shrink-0 w-11 h-11 rounded-xl flex items-center justify-center", style:{background:"var(--surface-6)"} },
-              React.createElement(f.icon, { size:18, className:"text-white/70" })),
-            React.createElement("div", null,
-              React.createElement("h3", { className:"text-white font-medium mb-1.5" }, f.title),
-              React.createElement("p", { className:"text-white/45 text-sm leading-relaxed" }, f.desc)));
-        })))),
+    // ── Fixed background layers ──
+    React.createElement("div", { "aria-hidden":"true", style:{position:"fixed",inset:0,zIndex:0,pointerEvents:"none"} },
+      // Ambient glow — top left
+      React.createElement("div", { style:{position:"absolute",top:"-20%",left:"-8%",width:"60%",height:"70%",background:"radial-gradient(ellipse at 40% 45%,rgba(255,255,255,0.055) 0%,transparent 62%)",filter:"blur(80px)"} }),
+      // Ambient glow — bottom right
+      React.createElement("div", { style:{position:"absolute",bottom:"-15%",right:"-5%",width:"55%",height:"65%",background:"radial-gradient(ellipse at 60% 55%,rgba(255,255,255,0.035) 0%,transparent 62%)",filter:"blur(100px)"} }),
+      // Structural grid
+      React.createElement("div", { style:{position:"absolute",inset:0,backgroundImage:"linear-gradient(rgba(255,255,255,0.022) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,0.022) 1px,transparent 1px)",backgroundSize:"72px 72px"} }),
+      // Grain / grunge texture
+      React.createElement("div", { dangerouslySetInnerHTML:{__html:'<svg xmlns="http://www.w3.org/2000/svg" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;opacity:0.11"><filter id="'+noiseId+'"><feTurbulence type="fractalNoise" baseFrequency="0.72" numOctaves="4" stitchTiles="stitch"/><feColorMatrix type="saturate" values="0"/></filter><rect width="100%" height="100%" filter="url(#'+noiseId+')"/></svg>'}, style:{position:"absolute",inset:0} })
+    ),
 
-    React.createElement("section", { id:"how", className:"py-24 px-6" },
-      React.createElement("div", { className:"max-w-4xl mx-auto" },
-        React.createElement("div", { className:"text-center mb-16" },
-          React.createElement("p", { className:"text-xs uppercase tracking-widest text-white/40 mb-3" }, "So funktioniert's"),
-          React.createElement("h2", { className:"text-4xl md:text-5xl font-medium text-white mb-4", style:{letterSpacing:"-0.03em"} }, "In drei Schritten zum Unternehmen.")),
-        React.createElement("div", { className:"space-y-12" },
-          [
-            {n:"01", t:"Erz\xe4hl uns von deiner Idee", d:"Ein kurzes Onboarding: Was machst du, wer sind deine Kunden, in welcher Phase bist du? Die KI baut daraus dein pers\xf6nliches Gr\xfcnderprofil."},
-            {n:"02", t:"Lass die KI f\xfcr dich arbeiten", d:"Businessplan, Finanzplan, Marktanalyse, F\xf6rderprogramme, Rechtsform-Empfehlung — alles auf Knopfdruck, alles individuell f\xfcr dich generiert."},
-            {n:"03", t:"Setze um — wir behalten den \xdcberblick", d:"Deine 90-Tage-Roadmap zeigt dir Woche f\xfcr Woche die n\xe4chsten Schritte. Das Cockpit erinnert dich an Fristen und feiert deine Fortschritte."}
-          ].map(function(s: any, i: number) {
-            return React.createElement("div", { key:i, className:"flex gap-6 md:gap-10 items-start" },
-              React.createElement("div", { className:"text-4xl md:text-5xl font-medium text-white/15 flex-shrink-0", style:{minWidth:60,letterSpacing:"-0.03em"} }, s.n),
-              React.createElement("div", null,
-                React.createElement("h3", { className:"text-xl md:text-2xl font-medium text-white mb-2", style:{letterSpacing:"-0.01em"} }, s.t),
-                React.createElement("p", { className:"text-white/50 text-base leading-relaxed max-w-xl" }, s.d)));
-          })))),
+    // ── All content ──
+    React.createElement("div", { style:{position:"relative",zIndex:1} },
 
-    React.createElement("section", { id:"faq", className:"py-24 px-6" },
-      React.createElement("div", { className:"max-w-2xl mx-auto" },
-        React.createElement("div", { className:"text-center mb-12" },
-          React.createElement("p", { className:"text-xs uppercase tracking-widest text-white/40 mb-3" }, "FAQ"),
-          React.createElement("h2", { className:"text-4xl md:text-5xl font-medium text-white", style:{letterSpacing:"-0.03em"} }, "H\xe4ufige Fragen.")),
-        React.createElement("div", { className:"divide-y divide-white/[0.06]" }, faqs.map(function(faq: any, i: number) {
-          var isOpen = activeFaq === i;
-          return React.createElement("div", { key:i },
-            React.createElement("button", { className:"w-full flex items-center justify-between py-5 text-left group", onClick:function(){setActiveFaq(isOpen?null:i)} },
-              React.createElement("span", { className:"text-white/80 font-medium text-base transition-colors" }, faq.q),
-              React.createElement(ChevronDown, { size:18, className:"text-white/30 flex-shrink-0 ml-4 transition-transform duration-200", style:{transform:isOpen?"rotate(180deg)":"rotate(0deg)"} })),
-            isOpen && React.createElement("div", { className:"pb-5 text-sm text-white/55 leading-relaxed max-w-xl" }, faq.a));
-        })))),
+      // ── Header ──
+      React.createElement("header", { style:{position:"fixed",top:0,left:0,right:0,zIndex:50,padding:"14px 24px",backdropFilter:"blur(24px)",WebkitBackdropFilter:"blur(24px)",background:"rgba(11,11,15,0.55)",borderBottom:"1px solid rgba(255,255,255,0.05)"} },
+        React.createElement("div", { className:"max-w-6xl mx-auto flex items-center justify-between" },
+          React.createElement(Logo, { size:"sm" }),
+          React.createElement("div", { className:"hidden md:flex items-center gap-8" },
+            React.createElement("a", { href:"#features", style:{fontSize:"0.75rem",color:c.dim,textDecoration:"none"} }, "Features"),
+            React.createElement("a", { href:"#how", style:{fontSize:"0.75rem",color:c.dim,textDecoration:"none"} }, "So funktioniert's"),
+            React.createElement("a", { href:"#faq", style:{fontSize:"0.75rem",color:c.dim,textDecoration:"none"} }, "FAQ"),
+            React.createElement("span", { onClick:onStart, style:{fontSize:"0.75rem",color:c.mid,cursor:"pointer"} }, "Anmelden →")),
+          React.createElement("button", { className:"md:hidden", style:{color:c.low,background:"none",border:"none",cursor:"pointer",padding:0}, onClick:function(){setMenuOpen(!menuOpen)} },
+            menuOpen ? React.createElement(X,{size:20}) : React.createElement(Menu,{size:20}))
+        )
+      ),
 
-    React.createElement("section", { className:"py-28 px-6" },
-      React.createElement("div", { className:"max-w-2xl mx-auto text-center" },
-        React.createElement("h2", { className:"text-4xl md:text-5xl font-medium text-white mb-5", style:{letterSpacing:"-0.03em"} },
-          "Deine Idee verdient ", React.createElement("span", { style:{background:"var(--hero-gradient)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"} }, "den richtigen Start.")),
-        React.createElement("p", { className:"text-white/50 mb-10 text-lg" }, "Lass die KI das Komplizierte machen. Du fokussierst dich auf das, was z\xe4hlt — dein Unternehmen aufzubauen."),
-        React.createElement(PrimaryButton, { onClick:onStart, className:"text-base py-4 px-10 mx-auto" }, "Jetzt kostenlos starten ", React.createElement(ArrowRight,{size:16})),
-        React.createElement("p", { className:"text-xs text-white/30 mt-5" }, "Kein Kreditkarteneintrag \xb7 Vollst\xe4ndig DSGVO-konform \xb7 Server in Deutschland"))),
+      // ── Mobile menu ──
+      menuOpen && React.createElement("div", { style:{position:"fixed",inset:0,zIndex:40,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:32,background:"rgba(11,11,15,0.97)",backdropFilter:"blur(24px)"} },
+        React.createElement("button", { onClick:function(){setMenuOpen(false)}, style:{position:"absolute",top:20,right:24,color:c.low,background:"none",border:"none",cursor:"pointer"} }, React.createElement(X,{size:20})),
+        ["Features","So funktioniert's","FAQ"].map(function(label, i) {
+          return React.createElement("a", { key:i, href:"#"+["features","how","faq"][i], style:{fontSize:"1.5rem",fontWeight:500,color:c.mid,textDecoration:"none"}, onClick:function(){setMenuOpen(false)} }, label);
+        }),
+        React.createElement("span", { onClick:function(){setMenuOpen(false);onStart();}, style:{fontSize:"1.1rem",color:c.hi,cursor:"pointer"} }, "Anmelden / Registrieren")
+      ),
 
-    React.createElement("footer", { className:"py-8 px-6 text-center text-xs text-white/25" }, "\xa9 2025 CoFounder AI \xb7 Datenschutz \xb7 Impressum"));
+      // ── Hero ──
+      React.createElement("section", { style:{paddingTop:144,paddingBottom:112,paddingLeft:24,paddingRight:24} },
+        React.createElement("div", { className:"max-w-4xl mx-auto text-center" },
+          React.createElement("div", { className:"sr inline-flex items-center gap-2 text-xs mb-10 px-3 py-1.5 rounded-full", style:{color:c.dim,background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.08)"} },
+            React.createElement(Sparkles,{size:12,style:{color:c.ghost}}),
+            "Dein KI-Co-Founder f\xfcr die Unternehmensgr\xfcndung"),
+          React.createElement("h1", { className:"sr sr-delay-1", style:{fontSize:"clamp(2.8rem,7vw,4.5rem)",fontWeight:500,letterSpacing:"-0.04em",lineHeight:0.94,color:c.hi,marginBottom:28} },
+            "Gr\xfcnde dein Unternehmen\xa0— ",
+            React.createElement("span", { style:{background:"linear-gradient(140deg,rgba(255,255,255,0.95) 0%,rgba(255,255,255,0.38) 100%)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent",backgroundClip:"text"} },
+              "mit KI an deiner Seite.")),
+          React.createElement("p", { className:"sr sr-delay-2", style:{fontSize:"1.1rem",lineHeight:1.65,color:c.low,marginBottom:44,maxWidth:580,marginLeft:"auto",marginRight:"auto"} },
+            "Von der ersten Idee bis zum eingetragenen Unternehmen: Businessplan, Finanzplan, F\xf6rderprogramme, Rechtsform, Beh\xf6rdeng\xe4nge — alles in einer Plattform."),
+          React.createElement("div", { className:"sr sr-delay-3", style:{marginBottom:48} },
+            React.createElement(PrimaryButton, { onClick:onStart, className:"text-base py-4 px-8" },
+              "Kostenlos starten\xa0", React.createElement(ArrowRight,{size:16}))),
+          React.createElement("div", { className:"sr sr-delay-4 flex items-center gap-7 justify-center flex-wrap", style:{fontSize:"0.72rem",color:c.ghost} },
+            ...[["Komplett kostenlos"],["DSGVO-konform"],["Keine Kreditkarte"],["In 5 Minuten startklar"]].map(function(item, i) {
+              return React.createElement("span", { key:i, className:"flex items-center gap-1.5" },
+                React.createElement(Check,{size:11,style:{color:c.ghost}}), item[0]);
+            })
+          )
+        )
+      ),
+
+      // ── Pillars ──
+      React.createElement("section", { style:{padding:"16px 24px 80px"} },
+        React.createElement("div", { className:"max-w-5xl mx-auto grid md:grid-cols-3 gap-5" },
+          pillars.map(function(p: any, i: number) {
+            return React.createElement("div", { key:i, className:"sr p-7 rounded-2xl", style:{...glass, transitionDelay:(i*0.1)+"s"} },
+              React.createElement("div", { style:{width:40,height:40,borderRadius:12,background:"rgba(255,255,255,0.07)",display:"flex",alignItems:"center",justifyContent:"center",marginBottom:20} },
+                React.createElement(p.icon, { size:19, style:{color:c.icon} })),
+              React.createElement("h3", { style:{fontWeight:500,fontSize:"1.05rem",letterSpacing:"-0.01em",color:c.hi,marginBottom:10} }, p.title),
+              React.createElement("p", { style:{fontSize:"0.85rem",lineHeight:1.65,color:c.low} }, p.desc));
+          })
+        )
+      ),
+
+      // ── Features ──
+      React.createElement("section", { id:"features", style:{padding:"80px 24px"} },
+        React.createElement("div", { className:"max-w-5xl mx-auto" },
+          React.createElement("div", { className:"text-center mb-16 sr" },
+            React.createElement("p", { style:{fontSize:"0.7rem",textTransform:"uppercase",letterSpacing:"0.14em",color:c.ghost,marginBottom:12} }, "Was du bekommst"),
+            React.createElement("h2", { style:{fontSize:"clamp(2rem,5vw,3rem)",fontWeight:500,letterSpacing:"-0.03em",color:c.hi,marginBottom:14} }, "Acht Werkzeuge. Eine Plattform."),
+            React.createElement("p", { style:{maxWidth:460,margin:"0 auto",fontSize:"0.9rem",color:c.low,lineHeight:1.65} },
+              "Jedes einzelne Tool w\xe4re eine eigene App wert. Bei CoFounder AI bekommst du sie alle — perfekt aufeinander abgestimmt.")),
+          React.createElement("div", { className:"grid md:grid-cols-2 gap-3" },
+            features.map(function(f: any, i: number) {
+              return React.createElement("div", { key:i, className:"sr flex gap-5 p-5 rounded-2xl", style:{...glass,transitionDelay:(i*0.06)+"s"} },
+                React.createElement("div", { style:{flexShrink:0,width:38,height:38,borderRadius:10,background:"rgba(255,255,255,0.07)",display:"flex",alignItems:"center",justifyContent:"center"} },
+                  React.createElement(f.icon, { size:16, style:{color:c.icon} })),
+                React.createElement("div", null,
+                  React.createElement("h3", { style:{fontWeight:500,fontSize:"0.9rem",color:c.mid,marginBottom:5} }, f.title),
+                  React.createElement("p", { style:{fontSize:"0.82rem",lineHeight:1.6,color:c.low} }, f.desc)));
+            })
+          )
+        )
+      ),
+
+      // ── Steps ──
+      React.createElement("section", { id:"how", style:{padding:"80px 24px"} },
+        React.createElement("div", { className:"max-w-4xl mx-auto" },
+          React.createElement("div", { className:"text-center mb-16 sr" },
+            React.createElement("p", { style:{fontSize:"0.7rem",textTransform:"uppercase",letterSpacing:"0.14em",color:c.ghost,marginBottom:12} }, "So funktioniert's"),
+            React.createElement("h2", { style:{fontSize:"clamp(2rem,5vw,3rem)",fontWeight:500,letterSpacing:"-0.03em",color:c.hi} }, "In drei Schritten zum Unternehmen.")),
+          React.createElement("div", { style:{display:"flex",flexDirection:"column",gap:12} },
+            steps.map(function(s: any, i: number) {
+              return React.createElement("div", { key:i, className:"sr flex gap-8 md:gap-12 items-start p-7 rounded-2xl", style:{...glass,transitionDelay:(i*0.12)+"s"} },
+                React.createElement("div", { style:{fontSize:"2.8rem",fontWeight:500,letterSpacing:"-0.03em",color:"rgba(255,255,255,0.1)",flexShrink:0,minWidth:52,lineHeight:1} }, s.n),
+                React.createElement("div", null,
+                  React.createElement("h3", { style:{fontSize:"1.15rem",fontWeight:500,letterSpacing:"-0.01em",color:c.mid,marginBottom:8} }, s.t),
+                  React.createElement("p", { style:{fontSize:"0.88rem",lineHeight:1.65,color:c.low,maxWidth:520} }, s.d)));
+            })
+          )
+        )
+      ),
+
+      // ── FAQ ──
+      React.createElement("section", { id:"faq", style:{padding:"80px 24px"} },
+        React.createElement("div", { className:"max-w-2xl mx-auto" },
+          React.createElement("div", { className:"text-center mb-12 sr" },
+            React.createElement("p", { style:{fontSize:"0.7rem",textTransform:"uppercase",letterSpacing:"0.14em",color:c.ghost,marginBottom:12} }, "FAQ"),
+            React.createElement("h2", { style:{fontSize:"clamp(2rem,5vw,3rem)",fontWeight:500,letterSpacing:"-0.03em",color:c.hi} }, "H\xe4ufige Fragen.")),
+          React.createElement("div", { style:{display:"flex",flexDirection:"column",gap:8} },
+            faqs.map(function(faq: any, i: number) {
+              var isOpen = activeFaq === i;
+              return React.createElement("div", { key:i, className:"sr rounded-2xl overflow-hidden", style:{...glass,transitionDelay:(i*0.05)+"s"} },
+                React.createElement("button", { className:"w-full flex items-center justify-between px-6 py-5 text-left", style:{background:"none",border:"none",cursor:"pointer"}, onClick:function(){setActiveFaq(isOpen?null:i)} },
+                  React.createElement("span", { style:{fontWeight:500,fontSize:"0.95rem",color:c.mid} }, faq.q),
+                  React.createElement(ChevronDown, { size:15, style:{color:c.ghost,flexShrink:0,marginLeft:16,transform:isOpen?"rotate(180deg)":"rotate(0deg)",transition:"transform 0.2s ease"} })),
+                isOpen && React.createElement("div", { style:{padding:"0 24px 20px",fontSize:"0.83rem",lineHeight:1.7,color:c.low} }, faq.a));
+            })
+          )
+        )
+      ),
+
+      // ── Final CTA ──
+      React.createElement("section", { style:{padding:"100px 24px 120px"} },
+        React.createElement("div", { className:"max-w-2xl mx-auto text-center sr" },
+          React.createElement("h2", { style:{fontSize:"clamp(2rem,5vw,3rem)",fontWeight:500,letterSpacing:"-0.03em",color:c.hi,marginBottom:18} },
+            "Deine Idee verdient\xa0",
+            React.createElement("span", { style:{background:"linear-gradient(140deg,rgba(255,255,255,0.9),rgba(255,255,255,0.35))",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent",backgroundClip:"text"} },
+              "den richtigen Start.")),
+          React.createElement("p", { style:{color:c.low,marginBottom:40,fontSize:"1rem",lineHeight:1.65} },
+            "Lass die KI das Komplizierte machen. Du fokussierst dich auf das, was z\xe4hlt — dein Unternehmen aufzubauen."),
+          React.createElement(PrimaryButton, { onClick:onStart, className:"text-base py-4 px-10 mx-auto" },
+            "Jetzt kostenlos starten\xa0", React.createElement(ArrowRight,{size:16})),
+          React.createElement("p", { style:{fontSize:"0.72rem",color:c.ghost,marginTop:18} },
+            "Kein Kreditkarteneintrag\xa0\xb7\xa0Vollst\xe4ndig DSGVO-konform\xa0\xb7\xa0Server in Deutschland"))
+      ),
+
+      // ── Footer ──
+      React.createElement("footer", { style:{padding:"24px",textAlign:"center",fontSize:"0.72rem",color:c.ghost} },
+        "\xa9 2025 CoFounder AI\xa0\xb7\xa0Datenschutz\xa0\xb7\xa0Impressum")
+    )
+  );
 }
